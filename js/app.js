@@ -82,6 +82,22 @@ let model = {
 }
 
 const exampleSpecs = {
+    "ChainPaxosP": {
+        specpath: "./specs/ChainPaxosPAnim.tla",
+        constant_vals: {
+            "C": "5",
+            "Val": "{a,b}",
+            "Nil": "\"Nil\"",
+        }
+    },    
+    "ChainPaxos": {
+        specpath: "./specs/ChainPaxosAnim.tla",
+        constant_vals: {
+            "C": "5",
+            "Val": "{a,b}",
+            "Nil": "\"Nil\"",
+        }
+    },
     "TwoPhase": {
         specpath: "./specs/TwoPhase.tla",
     },
@@ -2677,7 +2693,7 @@ async function loadApp() {
     // let specPath = "./specs/lockserver_nodefs_anim.tla";
     // let specPath = "./specs/MongoLoglessDynamicRaft.tla";
     // let specPath = "./specs/Paxos.tla";
-    model.specPath = "./specs/TwoPhase.tla";
+    model.specPath = "./specs/ChainPaxosAnim.tla";
     // let specPath = "./specs/simple_test.tla";
     // model.specPath = "./specs/simple_lockserver.tla";
 
