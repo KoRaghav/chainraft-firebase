@@ -57,15 +57,15 @@ c2 == Circle(20, 10, 5, [fill |-> "red"])
 ----------------------------------------
 \* Offsets
 
-Spacing == 38
+Spacing == 35
 
 \* General bases
 XBase == 20
-YBase == 33
+YBase == 58
 
 \* Client bases
 CXBase == XBase + 15
-CYBase == YBase - 29
+CYBase == YBase - 24
 
 ----------------------------------------
 \* Client Symbol
@@ -73,7 +73,7 @@ CYBase == YBase - 29
 client == Group(<<
             Circle(CXBase, CYBase + 9 , 12, ("stroke" :> "black" @@ "fill" :> "pink")),
             Text(CXBase, CYBase + 12, "Client", ("fill" :> "black" @@ "text-anchor" :> "middle" @@ "font-size" :> "8px"))>>,
-            [h_ \in {} |-> {} ])
+            [l \in {} |-> {} ])
 
 ----------------------------------------
 \* Client-Server messages Elements
@@ -84,7 +84,8 @@ msgsReq(m) == IF m.type = "WriteRequest" THEN "WReq"
                 ELSE "RRes"
 
 msgsVal(m) == IF m.type = "WriteRequest" \/ m.type = "ReadResponse"
-                THEN ToString(m.id) \o " | " \o ToString(m.val) 
+                THEN IF m.val = Nil THEN ToString(m.id) \o " | Nil"
+                     ELSE ToString(m.id) \o " | " \o ToString(m.val)
                 ELSE IF m.type = "ReadRequest" THEN ToString(m.id) \o " | " \o "?"
                 ELSE ToString(m.id)
 
@@ -101,11 +102,11 @@ msgsStroke(m) ==  IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
                     ELSE "green"
 
 msgsReqEntry(xbase, ybase, m) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> msgsFill(m) @@ "stroke" :> msgsStroke(m))), 
-                                   Text(xbase + 15, ybase + 8, msgsReq(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h_ \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 8, msgsReq(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 msgsValEntry(xbase, ybase, m) == Group(<<Rect(xbase + 1, ybase + 10, 28, 10, ("fill" :> msgsFill(m) @@ "stroke" :> msgsStroke(m))), 
-                                   Text(xbase + 15, ybase + 18, msgsVal(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h_ \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 18, msgsVal(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 
-msgsEntry(xbase, ybase, m) == Group(<<msgsReqEntry(xbase, ybase, m), msgsValEntry(xbase, ybase, m)>>, [h_ \in {} |-> {}])
+msgsEntry(xbase, ybase, m) == Group(<<msgsReqEntry(xbase, ybase, m), msgsValEntry(xbase, ybase, m)>>, [l \in {} |-> {}])
 msgsElems ==  LET msgSeq == SetToSeq(msgs)
               IN [ind \in DOMAIN msgSeq |-> msgsEntry(CXBase - (30 * (ind-1)) - 45, CYBase, msgSeq[ind])]
 
@@ -116,7 +117,8 @@ opsReq(ind) == IF ops[ind].type = "Write" THEN "Write"
                ELSE "Read"
 
 opsVal(ind) == IF ops[ind].type = "Write" \/ ops[ind].status = "Done"
-               THEN ToString(ind) \o " | " \o ToString(ops[ind].val) 
+               THEN IF ops[ind].val = Nil THEN ToString(ind) \o " | Nil"
+                    ELSE ToString(ind) \o " | " \o ToString(ops[ind].val)
                ELSE ToString(ind) \o " | " \o "?"
 
 opsFill(ind) == IF ops[ind].status = "Done"
@@ -128,11 +130,11 @@ opsText(ind) == IF ops[ind].status = "Done"
                 ELSE "black"
 
 opsReqEntry(ind, xbase, ybase) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> opsFill(ind) @@ "stroke" :> "black")), 
-                                   Text(xbase + 15, ybase + 8, opsReq(ind), ("fill" :> opsText(ind) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h_ \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 8, opsReq(ind), ("fill" :> opsText(ind) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 opsValEntry(ind, xbase, ybase) == Group(<<Rect(xbase + 1, ybase + 10, 28, 10, ("fill" :> opsFill(ind) @@ "stroke" :> "black")), 
-                                   Text(xbase + 15, ybase + 18, opsVal(ind), ("fill" :> opsText(ind) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h_ \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 18, opsVal(ind), ("fill" :> opsText(ind) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 
-opsEntry(ind, xbase, ybase) == Group(<<opsReqEntry(ind, xbase, ybase), opsValEntry(ind, xbase, ybase)>>, [h_ \in {} |-> {}])
+opsEntry(ind, xbase, ybase) == Group(<<opsReqEntry(ind, xbase, ybase), opsValEntry(ind, xbase, ybase)>>, [l \in {} |-> {}])
 opsElems ==  [ind \in DOMAIN ops |-> opsEntry(ind, CXBase + 30 * (ind-1) + 15, CYBase )]
 
 ----------------------------------------
@@ -156,21 +158,21 @@ readqLogText(id) == IF readQueue[id] = <<>> THEN ""
                  ELSE "logIdx:"
 
 readqReqEntry(id, xbase, ybase) == Group(<<Rect(xbase + 1, ybase, 10, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
-                                   Text(xbase + 6, ybase + 8, ToString(id), ("fill" :> "black" @@ "text-anchor" :>  "middle" @@ "font-size" :> "8px"))>>, [h_ \in {} |-> {}])
+                                   Text(xbase + 6, ybase + 8, ToString(id), ("fill" :> "black" @@ "text-anchor" :>  "middle" @@ "font-size" :> "8px"))>>, [l \in {} |-> {}])
 readqValEntry(logIdx, xbase, ybase) == Group(<<Rect(xbase + 1, ybase + 10, 10, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
-                                   Text(xbase + 6, ybase + 18, ToString(logIdx), ("fill" :> "black" @@ "text-anchor" :>  "middle" @@ "font-size" :> "8px"))>>, [h_ \in {} |-> {}])
+                                   Text(xbase + 6, ybase + 18, ToString(logIdx), ("fill" :> "black" @@ "text-anchor" :>  "middle" @@ "font-size" :> "8px"))>>, [l \in {} |-> {}])
 
-readqEntry(id, logIdx, xbase, ybase) == Group(<<readqReqEntry(id, xbase, ybase), readqValEntry(logIdx, xbase, ybase)>>, [h_ \in {} |-> {}])
+readqEntry(id, logIdx, xbase, ybase) == Group(<<readqReqEntry(id, xbase, ybase), readqValEntry(logIdx, xbase, ybase)>>, [l \in {} |-> {}])
 readqElem(id, xbase, ybase) ==  LET rSeq == readSeq(id) IN
-                                Group([ind \in DOMAIN rSeq |-> readqEntry(rSeq[ind].id, rSeq[ind].logIdx, xbase+(12 * ind), ybase)], [h_ \in {} |-> {}])
+                                Group([ind \in DOMAIN rSeq |-> readqEntry(rSeq[ind].id, rSeq[ind].logIdx, xbase+(12 * ind), ybase)], [l \in {} |-> {}])
 readqlabels(id, xbase, ybase) == Group(<<Text(xbase + 6, ybase + 8, readqIDText(id), ("fill" :> "black" @@ "text-anchor" :>  "end" @@ "font-size" :> "8px")),
                        Text(xbase + 6, ybase + 18, readqLogText(id), ("fill" :> "black" @@ "text-anchor" :>  "end" @@ "font-size" :> "8px"))>>, 
-                [h_ \in {} |-> {}])
+                [l \in {} |-> {}])
 
 readqElems ==  [i \in Server |-> 
                     Group(<<readqElem(i, XBase + 100, YBase + (i-1) * Spacing + 12), 
                             readqlabels(i, XBase + 105, YBase + (i-1) * Spacing + 12)>>, 
-                    [h_ \in {} |-> {}])]
+                    [l \in {} |-> {}])]
 
 ----------------------------------------
 \* Buffer Elements
@@ -183,12 +185,12 @@ bufVal(id,ind) == IF buf[id][ind].type = "Accept"
                ELSE ToString(buf[id][ind].ni)
 
 bufReqEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
-                                   Text(xbase + 15, ybase + 8, bufReq(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h_ \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 8, bufReq(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 bufValEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 1, ybase + 10, 28, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
-                                   Text(xbase + 15, ybase + 18, bufVal(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h_ \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 18, bufVal(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 
-bufEntry(id, xbase, ybase, ind) == Group(<<bufReqEntry(id, xbase, ybase, ind), bufValEntry(id, xbase, ybase, ind)>>, [h_ \in {} |-> {}])
-bufElem(id, xbase, ybase) == Group([ind \in DOMAIN buf[id] |-> bufEntry(id, xbase-(30 * ind), ybase, ind)], [h_ \in {} |-> {}])
+bufEntry(id, xbase, ybase, ind) == Group(<<bufReqEntry(id, xbase, ybase, ind), bufValEntry(id, xbase, ybase, ind)>>, [l \in {} |-> {}])
+bufElem(id, xbase, ybase) == Group([ind \in DOMAIN buf[id] |-> bufEntry(id, xbase-(30 * ind), ybase, ind)], [l \in {} |-> {}])
 bufElems ==  [i \in Server |-> bufElem(i, XBase, YBase + (i-1) * Spacing + 12)]
 
 ----------------------------------------
@@ -198,16 +200,20 @@ logEntryFill(id,ind) == IF ind <= maxAck[id] THEN "lightgreen"
                           ELSE IF log[id][ind].decided THEN "orange"
                           ELSE "lightgray"
                           
-logEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, [fill |-> logEntryFill(id,ind), stroke |-> "black"]), 
-                                   Text(xbase + 33, ybase + 8, ToString(log[id][ind].val), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [h_ \in {} |-> {}])
-logElem(id, xbase, ybase) == Group([ind \in DOMAIN log[id] |-> logEntry(id, xbase + 12 * (ind-1), ybase, ind)], [h_ \in {} |-> {}])
+logEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, ("fill" :> logEntryFill(id,ind) @@ "stroke" :> "black")),
+                                   Text(xbase + 33, ybase + 8, ToString(log[id][ind].val), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
+\* logElem(id, xbase, ybase) == Group([ind \in DOMAIN log[id] |-> logEntry(id, xbase + 12 * (ind-1), ybase, ind)], [l \in {} |-> {}])
+logElem(id, xbase, ybase) ==
+  LET indSeq == SetToSeq(DOMAIN log[id]) IN
+  Group( [k \in DOMAIN indSeq |-> logEntry(id, xbase + 12*(k-1), ybase, indSeq[k])], [l \in {} |-> {}])
+
 logElems ==  [i \in Server |-> logElem(i, XBase, YBase + (i-1) * Spacing + 12)]
 
 ----------------------------------------
 \* mAcks Elements
 
 mAckElem(id, xbase, ybase) == Group(<<Rect(xbase + 10, ybase, 10, 10, ("fill" :> "skyblue" @@ "stroke" :> "black")), 
-                                 Text(xbase + 13, ybase + 8, ToString(maxAck[id]), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [h_ \in {} |-> {}])
+                                 Text(xbase + 13, ybase + 8, ToString(maxAck[id]), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 mAcks == [i \in Server |-> mAckElem(i, XBase, YBase + (i-1) * Spacing + 27)]
 
 ----------------------------------------
@@ -226,13 +232,33 @@ cs == [i \in Server |->
                 ELSE IF csleader[i] = i THEN "gold" 
                 ELSE "gray"]),
             Text(XBase + 15, YBase + (i-1) * Spacing + 20, id, ("fill" :> TextFill(i) @@ "text-anchor" :> "middle" @@ "font-size" :> "9px"))>>,
-            [h_ \in {} |-> {} ])] \* Change the color of the text when deleting any server
+            [l \in {} |-> {} ])] \* Change the color of the text when deleting any server
 
-line == Rect(XBase -80, YBase-2, 200, 1, ("fill" :> "white" @@ "stroke" :> "black"))
+----------------------------------------
+\* H and P Elements
+                          
+hEntry(ind, xbase, ybase) == Group(<<Rect(xbase + 30, ybase, 10, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")),
+                                   Text(xbase + 33, ybase + 8, ToString(h[ind]), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 
-extras == <<line>>
+hElems ==  [ind \in DOMAIN h |-> hEntry(ind, XBase + 12 * (ind-1) - 20, YBase - 57)]
+
+pEntry(ind, xbase, ybase) == Group(<<Rect(xbase + 30, ybase, 10, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")),
+                                   Text(xbase + 33, ybase + 8, ToString(p[ind]), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
+
+pElems ==  [ind \in DOMAIN p |-> pEntry(ind, XBase + 12 * (ind-1) - 20, YBase - 44)]
+
+labels == Group(<<Text(XBase + 8, YBase - 49, "h:", ("text-anchor" :>  "end" @@ "font-size" :> "9px")),
+     			  Text(XBase + 8, YBase - 37, "p:", ("text-anchor" :>  "end" @@ "font-size" :> "9px"))>>, [l \in {} |-> {}])
+----------------------------------------
+\* Extras
+
+line == Rect(XBase -80, YBase+1, 200, 1, ("fill" :> "white" @@ "stroke" :> "black"))
+
+----------------------------------------
+
+extras == <<line>> \o hElems \o pElems \o <<labels>>
 clientAnim == <<client>> \o opsElems \o msgsElems
-serverAnim == cs \o mAcks \o logElems \o bufElems \o readqElems
+serverAnim == cs \o mAcks \o bufElems \o logElems \o readqElems
 
 AnimView == Group(serverAnim \o clientAnim \o extras, [i \in {} |-> {}])
 
