@@ -138,7 +138,7 @@ TypeServerVars ==
 
 -----------------------------------------------------------------------------
 
-vars == <<clientVars, serverVars>>
+CPvars == <<clientVars, serverVars>>
 
 CPInit == InitClientVars /\ InitServerVars
 
@@ -181,15 +181,12 @@ ClientSendWrite(v) ==
                            status |-> "Pending"])
     /\ UNCHANGED serverVars
 
-ClientRecvWrite(i) ==
-    /\ \E m \in msgs :
-        /\ m.type = "WriteResponse"
-        /\ m.id = i
-        /\ RemoveMsg(m)
-        /\ ops[i].status = "Pending"
-        /\ ops' = [ops EXCEPT ![i].status = "Done"]
-        /\ msgs' = msgs \ {m}
-        /\ UNCHANGED serverVars
+ClientRecvWrite(m) ==
+    /\ m.type = "WriteResponse"
+    /\ ops[m.id].status = "Pending"
+    /\ ops' = [ops EXCEPT ![m.id].status = "Done"]
+    /\ RemoveMsg(m)
+    /\ UNCHANGED serverVars
         
 ClientSendRead ==
     /\ SendMsg([type |-> "ReadRequest",
@@ -198,14 +195,12 @@ ClientSendRead ==
                            status |-> "Pending"])
     /\ UNCHANGED serverVars
 
-ClientRecvRead(i) ==
-    /\ \E m \in msgs :
-        /\ m.type = "ReadResponse"
-        /\ m.id = i
-        /\ RemoveMsg(m)
-        /\ ops[i].status = "Pending"
-        /\ ops' = [ops EXCEPT ![i] = [type |-> "Read", status |-> "Done", val |-> m.val]]
-        /\ UNCHANGED serverVars
+ClientRecvRead(m) ==
+    /\ m.type = "ReadResponse"
+    /\ ops[m.id].status = "Pending"
+    /\ ops' = [ops EXCEPT ![m.id] = [type |-> "Read", status |-> "Done", val |-> m.val]]
+    /\ RemoveMsg(m)
+    /\ UNCHANGED serverVars
 
 -----------------------------------------------------------------------------
 (* Server Operations *)
@@ -248,7 +243,7 @@ RecvAccept(s) ==
                           THEN MAX({m.nAcpt+1, log[s][m.ni].nAcpt})
                           ELSE m.nAcpt+1 
                  decided == IsQuorum(nAcpt)
-                 mAck == MAX({m.mAck, maxAck[s]})
+                 mAck == m.mAck
              IN /\ maxAck' = [maxAck EXCEPT ![s] = mAck]
                 /\ log' = [log EXCEPT ![s] = @ @@ (m.ni :>
                                   [id        |-> m.id,
@@ -321,14 +316,12 @@ CPNext ==
     \/ \E s \in Server : RecvAccept(s)
     \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m)
     \/ \E s \in Server : \E m \in msgs : RecvRead(s, m)
-    \/ \E i \in DOMAIN ops : ClientRecvWrite(i)
-    \/ \E i \in DOMAIN ops : ClientRecvRead(i)
+    \/ \E m \in msgs : ClientRecvWrite(m)
+    \/ \E m \in msgs : ClientRecvRead(m)        
         
-        
-CPSpec == CPInit /\ [][CPNext]_vars
-
+CPSpec == CPInit /\ [][CPNext]_CPvars
 =============================================================================
 \* Modification History
-\* Last modified Thu Apr 24 21:44:21 IST 2025 by Kotikala Raghav
+\* Last modified Fri Apr 25 08:51:28 IST 2025 by Kotikala Raghav
 \* Last modified Wed Apr 23 22:54:06 IST 2025 by jay
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav

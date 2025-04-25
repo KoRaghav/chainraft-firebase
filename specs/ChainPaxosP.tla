@@ -2,7 +2,6 @@
 
 EXTENDS ChainPaxos
 
-
 VARIABLE h, \* Stores linearized operations
          p  \* predicts the upcoming sequence of maxAcks in Accept messages
 
@@ -27,35 +26,39 @@ LeaderRecvWriteP(s, m) ==
     /\ UNCHANGED h
 
 LeaderRecvAcceptAckP(s) ==
-    /\ LeaderRecvAcceptAck(s)
+    /\ buf[s] # << >>
     /\ LET m == Head(buf[s])
-       IN Len(p) >= 2 => m.ni <= p[2]
+       IN /\ m.type = "AcceptAck"
+          /\ Len(p) >= 2 => m.ni <= p[2]
+    /\ LeaderRecvAcceptAck(s)
     /\ UNCHANGED <<h, p>>
 
 RecvAcceptP(s) ==
-    /\ RecvAccept(s)
+    /\ buf[s] # << >>
     /\ LET m == Head(buf[s])
-       IN IF IsQuorum(m.nAcpt + 1) /\ ~IsQuorum(m.nAcpt)
-          THEN \E bool \in BOOLEAN :
-            LET r == UNION { {id \in UNION {readQueue[srv][i] : i \in {k \in DOMAIN readQueue[srv] : k <= m.ni}} :
-                                ~\E j \in DOMAIN h : h[j] = id} :
-                                srv \in {s_ \in Server : s_ = 1}}
-                     \union
-                     UNION { {id \in UNION {readQueue[srv][j] : j \in {k \in DOMAIN readQueue[srv] : k <= m.mAck}} :
+       IN /\ m.type = "Accept"
+          /\ IF IsQuorum(m.nAcpt + 1) /\ ~IsQuorum(m.nAcpt)
+             THEN \E bool \in BOOLEAN :
+                LET r == UNION { {id \in UNION {readQueue[srv][i] : i \in {k \in DOMAIN readQueue[srv] : k <= m.ni}} :
                                     ~\E j \in DOMAIN h : h[j] = id} :
-                                 srv \in {s_ \in Server : s_ >= s}}
-                     \union
-                     IF bool
-                     THEN UNION { {id \in UNION {readQueue[srv][j] : j \in {k \in DOMAIN readQueue[srv] : k <= m.ni}} :
-                                    ~\E j \in DOMAIN h : h[j] = id} :
-                                 srv \in {s_ \in Server : s_ < s /\ s_ # 1}}
-                     ELSE {}
-                     
-            IN \E seq \in {sq \in [1..Cardinality(r) -> r] :
-               /\ \A x,y \in 1..Cardinality(r): sq[x] = sq[y] => x = y} :
-               /\ h' = Append(h, m.id) \o seq
-               /\ IF bool THEN p' = Append(p, m.ni) ELSE UNCHANGED p
-          ELSE UNCHANGED <<h, p>>
+                                    srv \in {s_ \in Server : s_ = 1}}
+                        \union
+                        UNION { {id \in UNION {readQueue[srv][j] : j \in {k \in DOMAIN readQueue[srv] : k <= m.mAck}} :
+                                        ~\E j \in DOMAIN h : h[j] = id} :
+                                    srv \in {s_ \in Server : s_ >= s}}
+                        \union
+                        IF bool
+                        THEN UNION { {id \in UNION {readQueue[srv][j] : j \in {k \in DOMAIN readQueue[srv] : k <= m.ni}} :
+                                        ~\E j \in DOMAIN h : h[j] = id} :
+                                    srv \in {s_ \in Server : s_ < s /\ s_ # 1}}
+                        ELSE {}
+                        
+                IN \E seq \in {sq \in [1..Cardinality(r) -> r] :
+                    /\ \A x,y \in 1..Cardinality(r): sq[x] = sq[y] => x = y} :
+                  /\ h' = Append(h, m.id) \o seq
+                  /\ IF bool THEN p' = Append(p, m.ni) ELSE UNCHANGED p
+             ELSE UNCHANGED <<h, p>>
+    /\ RecvAccept(s)
     
 CPNextP ==
     \/ \E v \in Val : ClientSendWrite(v) /\ UNCHANGED <<h, p>>
@@ -64,17 +67,18 @@ CPNextP ==
     \/ \E s \in Server : RecvAcceptP(s)
     \/ \E s \in Server : \E m \in msgs : LeaderRecvWriteP(s, m)
     \/ \E s \in Server : \E m \in msgs : RecvRead(s, m) /\ UNCHANGED <<h, p>>
-    \/ \E i \in DOMAIN ops : ClientRecvWrite(i) /\ UNCHANGED <<h, p>>
-    \/ \E i \in DOMAIN ops : ClientRecvRead(i) /\ UNCHANGED <<h, p>>
-        
-        
-CPSpecP == CPInitP /\ [][CPNextP]_<<vars, h, p>>
+    \/ \E m \in msgs : ClientRecvWrite(m) /\ UNCHANGED <<h, p>>
+    \/ \E m \in msgs : ClientRecvRead(m) /\ UNCHANGED <<h, p>>
 
-\* INSTANCE SSLinearM
+CPvarsP == <<CPvars, h, p>>
+        
+CPSpecP == CPInitP /\ [][CPNextP]_CPvarsP
+
+ INSTANCE SSLinearM
 
 \* THEOREM CPSpecP => LSpecM
 
 =============================================================================
 \* Modification History
-\* Last modified Thu Apr 24 19:39:46 IST 2025 by Kotikala Raghav
+\* Last modified Fri Apr 25 08:51:46 IST 2025 by Kotikala Raghav
 \* Created Mon Apr 14 12:07:02 IST 2025 by Kotikala Raghav

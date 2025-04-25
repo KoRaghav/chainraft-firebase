@@ -238,6 +238,8 @@ AnimView == Group(serverAnim \o clientAnim \o extras, [i \in {} |-> {}])
 
 -----------------------------------------------------------------------------
 
+vars == CPvars
+
 Init == CPInit
 
 Next ==
@@ -247,8 +249,8 @@ Next ==
     \/ \E s \in Server : RecvAccept(s)
     \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m)
     \/ \E s \in Server : \E m \in msgs : RecvRead(s, m)
-    \/ \E i \in DOMAIN ops : ClientRecvWrite(i)
-    \/ \E i \in DOMAIN ops : ClientRecvRead(i)
+    \/ \E m \in msgs : ClientRecvWrite(m)
+    \/ \E m \in msgs : ClientRecvRead(m)
 
 =============================================================================
 \* Modification History
