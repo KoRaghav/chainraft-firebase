@@ -81,11 +81,13 @@ client == Group(<<
 msgsReq(m) == IF m.type = "WriteRequest" THEN "WReq"
                 ELSE IF m.type = "WriteResponse" THEN "WRes"
                 ELSE IF m.type = "ReadRequest" THEN "RReq"
+                ELSE IF m.type = "RemoveNode" THEN "Remove"
                 ELSE "RRes"
 
 msgsVal(m) == IF m.type = "WriteRequest" \/ m.type = "ReadResponse"
                 THEN ToString(m.id) \o " | " \o ToString(m.val) 
                 ELSE IF m.type = "ReadRequest" THEN ToString(m.id) \o " | " \o "?"
+                ELSE IF m.type = "RemoveNode" THEN ToString(m.srv)
                 ELSE ToString(m.id)
 
 msgsFill(m) == IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
@@ -98,10 +100,11 @@ msgsText(m) == IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
 
 msgsStroke(m) ==  IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
                     THEN "orange"
+                    ELSE IF m.type = "RemoveNode" THEN "red"
                     ELSE "green"
 
 msgsReqEntry(xbase, ybase, m) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> msgsFill(m) @@ "stroke" :> msgsStroke(m))), 
-                                   Text(xbase + 15, ybase + 8, msgsReq(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 8, msgsReq(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "7px")>>, [h \in {} |-> {}])
 msgsValEntry(xbase, ybase, m) == Group(<<Rect(xbase + 1, ybase + 10, 28, 10, ("fill" :> msgsFill(m) @@ "stroke" :> msgsStroke(m))), 
                                    Text(xbase + 15, ybase + 18, msgsVal(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h \in {} |-> {}])
 
@@ -175,15 +178,18 @@ readqElems ==  [i \in Server |->
 ----------------------------------------
 \* Buffer Elements
 
-bufReq(id,ind) == IF buf[id][ind].type = "Accept" THEN "Acpt"
-               ELSE "AcAck"
+bufReq(id,ind) == IF buf[id][ind].type = "Accept" THEN
+                    IF buf[id][ind].val \in RemoveNode
+                    THEN "Remove"
+                    ELSE "Acpt"
+                  ELSE "AcAck"
 
 bufVal(id,ind) == IF buf[id][ind].type = "Accept"
                THEN ToString(buf[id][ind].mAck) \o " | " \o ToString(buf[id][ind].ni) 
                ELSE ToString(buf[id][ind].ni)
 
 bufReqEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
-                                   Text(xbase + 15, ybase + 8, bufReq(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 8, bufReq(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "7px")>>, [h \in {} |-> {}])
 bufValEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 1, ybase + 10, 28, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
                                    Text(xbase + 15, ybase + 18, bufVal(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [h \in {} |-> {}])
 
@@ -198,8 +204,8 @@ logEntryFill(id,ind) == IF ind <= maxAck[id] THEN "lightgreen"
                           ELSE IF log[id][ind].decided THEN "orange"
                           ELSE "lightgray"
                           
-logEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, [fill |-> logEntryFill(id,ind), stroke |-> "black"]), 
-                                   Text(xbase + 33, ybase + 8, ToString(log[id][ind].val), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [h \in {} |-> {}])
+logEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, [fill |-> logEntryFill(id,ind), stroke |-> IF log[id][ind].val \in RemoveNode THEN "red" ELSE "black"]), 
+                                   Text(xbase + 33, ybase + 8, IF log[id][ind].val \in RemoveNode THEN ToString(log[id][ind].val.srv) ELSE ToString(log[id][ind].val), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [h \in {} |-> {}])
 logElem(id, xbase, ybase) == Group([ind \in DOMAIN log[id] |-> logEntry(id, xbase + 12 * (ind-1), ybase, ind)], [h \in {} |-> {}])
 logElems ==  [i \in Server |-> logElem(i, XBase, YBase + (i-1) * Spacing + 12)]
 
@@ -250,7 +256,9 @@ Next ==
     \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m)
     \/ \E s \in Server : \E m \in msgs : RecvRead(s, m)
     \/ \E m \in msgs : ClientRecvWrite(m)
-    \/ \E m \in msgs : ClientRecvRead(m)
+    \/ \E m \in msgs : ClientRecvRead(m)  
+    \/ \E s \in Server : SuspectNextNode(s) 
+    
 
 =============================================================================
 \* Modification History

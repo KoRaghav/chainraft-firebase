@@ -1,4 +1,4 @@
------------------------------ MODULE ChainPaxos -----------------------------
+----------------------------- MODULE ChainPaxosNoAnim -----------------------
 
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
@@ -156,9 +156,9 @@ hisVars == <<noopLog, removeNodeLog>>
 
 -----------------------------------------------------------------------------
 
-CPvars == <<clientVars, serverVars, hisVars>>
+vars == <<clientVars, serverVars, hisVars>>
 
-CPInit == InitClientVars /\ InitServerVars /\ InitHisVars
+Init == InitClientVars /\ InitServerVars /\ InitHisVars
 
 CPTypeOK == TypeClientVars /\ TypeServerVars /\ TypeHisVars
 
@@ -385,7 +385,7 @@ SuspectNextNode(s) ==
 
 -----------------------------------------------------------------------------
 
-CPNext ==
+Next ==
     \/ \E v \in Val : ClientSendWrite(v)
     \/ ClientSendRead
     \/ \E s \in Server : LeaderRecvAcceptAck(s)
@@ -397,7 +397,7 @@ CPNext ==
     
     \/ \E s \in Server : SuspectNextNode(s)      
         
-CPSpec == CPInit /\ [][CPNext]_CPvars
+\* CPSpec == CPInit /\ [][CPNext]_CPvars
 
 -----------------------------------------------------------------------------
 
@@ -415,6 +415,6 @@ LogInv == \A s \in Server :
 
 =============================================================================
 \* Modification History
-\* Last modified Tue May 06 17:11:16 IST 2025 by Kotikala Raghav
+\* Last modified Tue May 06 13:25:47 IST 2025 by Kotikala Raghav
 \* Last modified Wed Apr 23 22:54:06 IST 2025 by jay
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav

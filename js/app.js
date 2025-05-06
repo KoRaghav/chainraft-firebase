@@ -82,7 +82,7 @@ let model = {
 }
 
 const exampleSpecs = {
-    "ChainPaxosP": {
+    "ChainPaxosP (animated)": {
         specpath: "./specs/ChainPaxosPAnim.tla",
         constant_vals: {
             "C": "5",
@@ -90,8 +90,24 @@ const exampleSpecs = {
             "Nil": "\"Nil\"",
         }
     },    
-    "ChainPaxos": {
+    "ChainPaxosP": {
+        specpath: "./specs/ChainPaxosP.tla",
+        constant_vals: {
+            "C": "5",
+            "Val": "{a,b}",
+            "Nil": "\"Nil\"",
+        }
+    },    
+    "ChainPaxos (animated)": {
         specpath: "./specs/ChainPaxosAnim.tla",
+        constant_vals: {
+            "C": "5",
+            "Val": "{a,b}",
+            "Nil": "\"Nil\"",
+        }
+    },
+    "ChainPaxos": {
+        specpath: "./specs/ChainPaxosNoAnim.tla",
         constant_vals: {
             "C": "5",
             "Val": "{a,b}",
