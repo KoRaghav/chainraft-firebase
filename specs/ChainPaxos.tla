@@ -11,6 +11,7 @@ Server == 1..C
 -----------------------------------------------------------------------------
 (* Messages *)
 
+NoOP == [type : {"NoOP"}]
 RemoveNode == [type : {"RemoveNode"}, srv : Server]
 AddNode == [type : {"AddNode"}, srv : Server]
 
@@ -20,7 +21,7 @@ Message ==
      ldr  : Server,
      na   : Server,
      id   : Nat \union {Nil}, \* Nil for RemoveNode
-     val  : Val \union RemoveNode,
+     val  : Val \union NoOP \union RemoveNode,
      nAcpt: Nat,
      mAck : Nat] \union
     [type : {"AcceptAck"},
@@ -187,6 +188,9 @@ NextNodeNotMarked(s, chain_, marked_) ==
 
 
 IsQuorum(nAcpt) == nAcpt + nAcpt > C
+IsNoOP(val) == val \in NoOP
+IsRemNo(val) == val \in RemoveNode
+IsAddNo(val) == val \in AddNode
 
 -----------------------------------------------------------------------------
 (* Client Operations *)   
@@ -223,6 +227,21 @@ ClientRecvRead(m) ==
 
 -----------------------------------------------------------------------------
 (* Server Operations *)
+
+\* Leader Sends the periodic NoOP (and starts instance)
+LeaderSendNoOP(s) == 
+    /\ s = csleader[s]
+    /\ maxAcpt' = [maxAcpt EXCEPT ![s] = @ + 1]
+    /\ buf' = [buf EXCEPT ![s] = Append(@,
+                [type   |-> "Accept",
+                 ni     |-> maxAcpt[s] + 1,
+                 ldr    |-> s,
+                 na     |-> np[s],
+                 id     |-> Nil,
+                 val    |-> [type |-> "NoOP"],
+                 nAcpt  |-> 0,
+                 mAck   |-> maxAck[s]])]
+    /\ UNCHANGED <<ops, msgs, readQueue, orgVars, logVars, hisVars, pending>>
 
 \* Leader receives a write message (and starts instance)
 LeaderRecvWrite(s, m) ==
@@ -297,7 +316,9 @@ RecvAccept(s) ==
                                 ELSE @]
                     ELSE UNCHANGED pending             
                 /\ UpdateOrgVars(s, m.ldr, m.na, m.val, decided, m.mAck)
-                /\ log' = [log EXCEPT ![s] = [i \in DOMAIN log[s] |-> 
+                /\ IF IsNoOP(m.val)
+                   THEN UNCHANGED <<log>>
+                   ELSE log' = [log EXCEPT ![s] = [i \in DOMAIN log[s] |-> 
                                     IF i <= m.mAck
                                     THEN [log[s][i] EXCEPT !.decided = TRUE]
                                     ELSE log[s][i]]
@@ -306,12 +327,23 @@ RecvAccept(s) ==
                                    val       |-> m.val,
                                    nAcpt     |-> nAcpt,
                                    decided   |-> decided])]
-                /\ LET latestCommittedInst == MAX({i \in DOMAIN log[s] :
-                            log[s][i].decided} \union {m.mAck})
-                       latestCommittedVal ==
-                            IF decided /\ m.ni > latestCommittedInst
-                            THEN m.val 
-                            ELSE log[s][latestCommittedInst].val
+                \* /\ log' = [log EXCEPT ![s] = [i \in DOMAIN log[s] |-> 
+                \*                     IF i <= m.mAck
+                \*                     THEN [log[s][i] EXCEPT !.decided = TRUE]
+                \*                     ELSE log[s][i]]
+                \*                 @@ (m.ni :>
+                \*                   [id        |-> m.id,
+                \*                    val       |-> m.val,
+                \*                    nAcpt     |-> nAcpt,
+                \*                    decided   |-> decided])]
+
+                /\ LET latestCommittedInst == MAX({i \in DOMAIN log[s] : /\ i <= m.mAck \/ log[s][i].decided
+                                                                         /\ log[s][i].val \in Val })
+                       latestCommittedVal == IF /\ ~( IsNoOP(m.val) \/ IsRemNo(m.val) \/ IsAddNo(m.val) ) 
+                                                /\ decided /\ m.ni > latestCommittedInst
+                                             THEN m.val 
+                                             ELSE IF latestCommittedInst = 0 THEN Nil
+                                             ELSE log[s][latestCommittedInst].val
                        readResponses ==
                             {[type |-> "ReadResponse", id |-> i,
                                val |-> latestCommittedVal] :
@@ -319,9 +351,24 @@ RecvAccept(s) ==
                                  j \in {k \in DOMAIN readQueue[s] : k <= m.mAck}}}
                        writeResponse == [type |-> "WriteResponse",
                                          id   |-> m.id]
+
+                \* /\ LET latestCommittedInst == MAX({i \in DOMAIN log[s] :
+                \*             log[s][i].decided} \union {m.mAck})
+                \*        latestCommittedVal ==
+                \*             IF decided /\ m.ni > latestCommittedInst
+                \*             THEN m.val 
+                \*             ELSE log[s][latestCommittedInst].val
+                \*        readResponses ==
+                \*             {[type |-> "ReadResponse", id |-> i,
+                \*                val |-> latestCommittedVal] :
+                \*                 i \in UNION {readQueue[s][j] :
+                \*                  j \in {k \in DOMAIN readQueue[s] : k <= m.mAck}}}
+                \*        writeResponse == [type |-> "WriteResponse",
+                \*                          id   |-> m.id]
+
                    IN IF /\ IsQuorum(m.nAcpt + 1)
                          /\ ~IsQuorum(m.nAcpt)
-                         /\ m.val \notin RemoveNode 
+                         /\ ~( IsNoOP(m.val) \/ IsRemNo(m.val) )
                       THEN msgs' = msgs \union readResponses \union {writeResponse}
                       ELSE msgs' = msgs \union readResponses
                 /\ IF cnextok[s] = csleader[s]
@@ -353,10 +400,18 @@ LeaderRecvAcceptAck(s) ==
                                 ELSE log[s][i]]]
           /\ readQueue' = [readQueue EXCEPT ![s] =
                                 [i \in {j \in DOMAIN @ : j > m.ni} |-> @[i]]]
-          /\ LET latestCommittedInst == MAX({i \in DOMAIN log[s] :
-                                                log[s][i].decided}
-                                                    \union {m.ni})
-                 latestCommittedVal == log[s][latestCommittedInst].val
+
+          /\ LET latestCommittedInst == IF m.ni \notin DOMAIN log[s]
+                                        THEN MAX({i \in DOMAIN log[s] : i < m.ni})
+                                        \* For Leader: commitIdx@T == ackedIdx@T
+                                        ELSE MAX({i \in DOMAIN log[s] : log[s][i].decided} \union {m.ni})
+
+        \*   /\ LET latestCommittedInst == MAX({i \in DOMAIN log[s] :
+        \*                                         log[s][i].decided}
+        \*                                             \union {m.ni})
+
+                 latestCommittedVal == IF latestCommittedInst = 0 THEN Nil
+                                       ELSE log[s][latestCommittedInst].val
                  readResponses ==
                     {[type |-> "ReadResponse", id |-> i, val |-> latestCommittedVal] :
                             i \in UNION {readQueue[s][j] :
@@ -387,6 +442,7 @@ SuspectNextNode(s) ==
 CPNext ==
     \/ \E v \in Val : ClientSendWrite(v)
     \/ ClientSendRead
+    \/ \E s \in Server : LeaderSendNoOP(s)
     \/ \E s \in Server : LeaderRecvAcceptAck(s)
     \/ \E s \in Server : RecvAccept(s)
     \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m)

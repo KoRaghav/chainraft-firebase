@@ -85,7 +85,8 @@ msgsReq(m) == IF m.type = "WriteRequest" THEN "WReq"
                 ELSE "RRes"
 
 msgsVal(m) == IF m.type = "WriteRequest" \/ m.type = "ReadResponse"
-                THEN ToString(m.id) \o " | " \o ToString(m.val) 
+                THEN IF m.val = Nil THEN ToString(m.id) \o " | Nil"
+                     ELSE ToString(m.id) \o " | " \o ToString(m.val)
                 ELSE IF m.type = "ReadRequest" THEN ToString(m.id) \o " | " \o "?"
                 ELSE IF m.type = "RemoveNode" THEN ToString(m.srv)
                 ELSE ToString(m.id)
@@ -119,7 +120,8 @@ opsReq(ind) == IF ops[ind].type = "Write" THEN "Write"
                ELSE "Read"
 
 opsVal(ind) == IF ops[ind].type = "Write" \/ ops[ind].status = "Done"
-               THEN ToString(ind) \o " | " \o ToString(ops[ind].val) 
+               THEN IF ops[ind].val = Nil THEN ToString(ind) \o " | Nil"
+                    ELSE ToString(ind) \o " | " \o ToString(ops[ind].val)
                ELSE ToString(ind) \o " | " \o "?"
 
 opsFill(ind) == IF ops[ind].status = "Done"
@@ -206,7 +208,11 @@ logEntryFill(id,ind) == IF ind <= maxAck[id] THEN "lightgreen"
                           
 logEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, [fill |-> logEntryFill(id,ind), stroke |-> IF log[id][ind].val \in RemoveNode THEN "red" ELSE "black"]), 
                                    Text(xbase + 33, ybase + 8, IF log[id][ind].val \in RemoveNode THEN ToString(log[id][ind].val.srv) ELSE ToString(log[id][ind].val), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [h \in {} |-> {}])
-logElem(id, xbase, ybase) == Group([ind \in DOMAIN log[id] |-> logEntry(id, xbase + 12 * (ind-1), ybase, ind)], [h \in {} |-> {}])
+\* logElem(id, xbase, ybase) == Group([ind \in DOMAIN log[id] |-> logEntry(id, xbase + 12 * (ind-1), ybase, ind)], [h \in {} |-> {}])
+logElem(id, xbase, ybase) ==
+  LET indSeq == SetToSeq(DOMAIN log[id]) IN
+  Group( [k \in DOMAIN indSeq |-> logEntry(id, xbase + 12*(k-1), ybase, indSeq[k])], [l \in {} |-> {}])
+
 logElems ==  [i \in Server |-> logElem(i, XBase, YBase + (i-1) * Spacing + 12)]
 
 ----------------------------------------
@@ -251,6 +257,7 @@ Init == CPInit
 Next ==
     \/ \E v \in Val : ClientSendWrite(v)
     \/ ClientSendRead
+    \/ \E s \in Server : LeaderSendNoOP(s)
     \/ \E s \in Server : LeaderRecvAcceptAck(s)
     \/ \E s \in Server : RecvAccept(s)
     \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m)
@@ -262,6 +269,6 @@ Next ==
 
 =============================================================================
 \* Modification History
-\* Last modified Wed Apr 23 22:54:06 IST 2025 by jay
+\* Last modified Tue May 06 22:13:09 IST 2025 by jay
 \* Last modified Mon Apr 21 18:43:16 IST 2025 by Kotikala Raghav
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav
