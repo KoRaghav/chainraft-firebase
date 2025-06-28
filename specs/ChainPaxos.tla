@@ -7,6 +7,7 @@ CONSTANT C,     \* Number of servers
          Nil    \* MV
  
 Server == 1..C
+MinQuoromSize == (C \div 2) + 1
 
 -----------------------------------------------------------------------------
 (* Messages *)
@@ -37,7 +38,7 @@ ClientMessage ==
      id   : Nat] \union
     [type : {"ReadResponse"},
      id   : Nat,
-     val  : Val]
+     val  : Val \union {Nil}]
      
 -----------------------------------------------------------------------------
 (* Client-Side Variables *)
@@ -92,8 +93,9 @@ TypeLogVars ==
     /\ \A s \in Server :
         /\ DOMAIN log[s] \subseteq Nat
         /\ \A i \in DOMAIN log[s] :
-            log[s][i] \in [id : Nat, val : Val,
-                           nAcpt : Nat, decided : BOOLEAN]
+            log[s][i] \in [id  : Nat \union {Nil},
+                           val : Val \union RemoveNode \union AddNode,
+                           na  : Server, nAcpt : Nat, decided : BOOLEAN]
     /\ np \in [Server -> Nat]
     /\ maxAck \in [Server -> Nat]
     
@@ -180,16 +182,35 @@ Reply(s, t, m) ==
 MIN(S) == CHOOSE x \in S : \A y \in S : x <= y
 MAX(S) == IF S = {} THEN 0 ELSE CHOOSE x \in S : \A y \in S : y <= x
 
+SetToSeqAsc(set) ==
+    LET n == Cardinality(set)
+    IN CHOOSE sq \in [1..n -> set] :
+                \A x, y \in 1..n :
+                    x < y => sq[x] < sq[y] 
+
+SeqToSet(seq) ==
+    {seq[i] : i \in DOMAIN seq}
 
 NextNodeNotMarked(s, chain_, marked_) ==
     LET nonMarked == chain_ \ marked_
         rightNodes == {t \in nonMarked : t > s}
     IN IF rightNodes = {} THEN MIN(nonMarked) ELSE MIN(rightNodes)
 
+IsQuorum(nAcpt, chainSize) == 
+    LET quoromSize == IF (chainSize \div 2) + 1 <= MinQuoromSize 
+                      THEN MinQuoromSize
+                      ELSE (chainSize \div 2)
+    \* LET quoromSize == chainSize \div 2
+    IN  nAcpt >= quoromSize
 
-IsQuorum(nAcpt) == nAcpt + nAcpt > C
+IsRemoved(s) == \/ s \in marked[s]
+                \/ ~\E i \in DOMAIN chain[s] : s = chain[s][i]
+
+IsSelfRemv(s, val) == val \in RemoveNode /\ val.srv = s
+
+IsFunctioning(s) == Cardinality(DOMAIN chain[s]) >= MinQuoromSize
 IsNoOP(val) == val \in NoOP
-IsRemNo(val) == val \in RemoveNode
+IsRemvNo(val) == val \in RemoveNode
 IsAddNo(val) == val \in AddNode
 
 -----------------------------------------------------------------------------
@@ -230,6 +251,7 @@ ClientRecvRead(m) ==
 
 \* Leader Sends the periodic NoOP (and starts instance)
 LeaderSendNoOP(s) == 
+    /\ IsFunctioning(s)
     /\ s = csleader[s]
     /\ maxAcpt' = [maxAcpt EXCEPT ![s] = @ + 1]
     /\ buf' = [buf EXCEPT ![s] = Append(@,
@@ -241,17 +263,19 @@ LeaderSendNoOP(s) ==
                  val    |-> [type |-> "NoOP"],
                  nAcpt  |-> 0,
                  mAck   |-> maxAck[s]])]
-    /\ UNCHANGED <<ops, msgs, readQueue, orgVars, logVars, hisVars, pending>>
+    /\ noopLog' = Append(noopLog, maxAcpt[s] + 1)
+    /\ UNCHANGED <<ops, msgs, readQueue, orgVars, logVars, removeNodeLog, pending>>
 
 \* Leader receives a write message (and starts instance)
 LeaderRecvWrite(s, m) ==
+    /\ IsFunctioning(s)
     /\ s = csleader[s]
     /\ \/ m.type = "WriteRequest"
        \/ m.type = "RemoveNode"
     /\ RemoveMsg(m)
     /\ maxAcpt' = [maxAcpt EXCEPT ![s] = @ + 1]
-       \* Append Accept message to the front of buffer 
-    /\ buf' = [buf EXCEPT ![s] = 
+       \* Append Accept message to the ~front~ BACK of buffer 
+    /\ buf' = [buf EXCEPT ![s] = @ \o
               <<[type   |-> "Accept",
                  ni     |-> maxAcpt[s] + 1,
                  ldr    |-> s,
@@ -259,168 +283,218 @@ LeaderRecvWrite(s, m) ==
                  id     |-> IF m \notin RemoveNode THEN m.id ELSE Nil,
                  val    |-> IF m \notin RemoveNode THEN m.val ELSE m,
                  nAcpt  |-> 0,
-                 mAck   |-> maxAck[s]]>> \o @]
+                 mAck   |-> maxAck[s]]>>]
     /\ pending' = [pending EXCEPT ![s] = @ \union
                     IF m \notin RemoveNode THEN {m.id} ELSE {}]
     /\ UNCHANGED <<ops, readQueue, orgVars, logVars, hisVars>>  
 
-SetToSeqAsc(set) ==
-    LET n == Cardinality(set)
-    IN CHOOSE sq \in [1..n -> set] :
-                \A x, y \in 1..n :
-                    x < y => sq[x] < sq[y] 
+-----------------------------------------------------------------------------
+(* Helper Functions *) 
 
-SeqToSet(seq) ==
-    {seq[i] : i \in DOMAIN seq}
+GetDecidedOrgVars(s, term, mAck) == 
+    LET decidedRemovals == {log[s][i].val.srv : 
+                                i \in {j \in DOMAIN log[s] : 
+                                    /\ j <= mAck 
+                                    /\ log[s][j].val \in RemoveNode 
+                                    /\ ~log[s][j].decided}}
+        decidedAdds == {log[s][i].val.srv :
+                            i \in {j \in DOMAIN log[s] : 
+                                /\ j <= mAck 
+                                /\ log[s][j].val \in AddNode 
+                                /\ ~log[s][j].decided}}
+ 
+        decidedMarked == IF np[s] >= term THEN marked[s] \ decidedRemovals ELSE {}
+
+        decidedChain == (SeqToSet(chain[s]) \union decidedAdds) \ (decidedRemovals)
+
+    IN << decidedMarked, decidedChain >>
+
+GetNewOrgVars(s, val, decided, decidedMarked, decidedChain) == 
+    LET newMarked == decidedMarked \union IF IsRemvNo(val) /\ ~decided THEN {val.srv} ELSE {}
+
+        toBeRemoved == IF IsRemvNo(val) /\ decided THEN {val.srv} ELSE {}
+        toBeAdded == IF IsAddNo(val) /\ decided THEN {val.srv} ELSE {}
+
+        newChain == (decidedChain \union toBeAdded) \ (toBeRemoved)
+
+    IN << newMarked, SetToSeqAsc(newChain), NextNodeNotMarked(s, newChain, newMarked) >>
 
 UpdateOrgVars(s, leader, term, val, decided, mAck) ==
-    /\ IF np[s] < term
-       THEN /\ np' = [np EXCEPT ![s] = term]
-            /\ csleader' = [csleader EXCEPT ![s] = leader]
-       ELSE UNCHANGED <<np, csleader>>
-    /\ LET decidedRemovals == {log[s][i].val.srv :
-            i \in {j \in DOMAIN log[s] : j <= mAck /\ log[s][j].val \in RemoveNode /\ ~log[s][j].decided}}
-       IN IF val \in RemoveNode 
-          THEN LET prevMarked == IF np[s] >= term THEN marked[s] \ decidedRemovals ELSE {}
-                   markedNodes == prevMarked \union IF ~decided THEN {val.srv} ELSE {} 
-               IN /\ marked' = [marked EXCEPT ![s] = markedNodes]
-                  /\ chain' = [chain EXCEPT ![s] = IF ~decided THEN @
-                                ELSE SetToSeqAsc({@[i] : i \in DOMAIN @} \ (decidedRemovals \union {val.srv})) ]
-                  /\ cnextok' = [cnextok EXCEPT ![s] =
-                        NextNodeNotMarked(s, {chain[s][t] : t \in DOMAIN chain[s]}, markedNodes)]
-       
-          ELSE /\ marked' = IF np[s] < term THEN [marked EXCEPT ![s] = {}] ELSE marked
-               /\ IF val \in AddNode
-                  THEN TRUE \* TODO
-                  ELSE /\ chain' = [chain EXCEPT ![s] = SetToSeqAsc(SeqToSet(@) \ decidedRemovals)]
-                       /\ cnextok' = [cnextok EXCEPT ![s] = NextNodeNotMarked(s, SeqToSet(chain[s]) \ decidedRemovals, marked[s])]
+    LET decidedVars == GetDecidedOrgVars(s, term, mAck)
+        newVars == GetNewOrgVars(s, val, decided, decidedVars[1], decidedVars[2])
+
+    IN  /\ marked'  = [marked EXCEPT ![s] = newVars[1]]
+        /\ chain'   =  [chain EXCEPT ![s] = newVars[2]]
+        /\ cnextok' = [cnextok EXCEPT ![s] = newVars[3]]
+
+UpdateLeaderInfo(s, leader, term, id, decided) ==
+    /\  IF np[s] < term
+        THEN /\ np' = [np EXCEPT ![s] = term]
+             /\ csleader' = [csleader EXCEPT ![s] = leader]
+        ELSE UNCHANGED <<np, csleader>>
+
+    /\ pending' = [pending EXCEPT ![s] =
+                    IF np[s] < term THEN {}
+                    ELSE IF decided THEN pending[s] \ {id}
+                         ELSE @]
+
+UpdateLogVars(s, ni, inst, mAck) ==
+    /\  maxAck' = [maxAck EXCEPT ![s] = mAck]
+    /\  LET updLog == [i \in DOMAIN log[s] |-> 
+                        IF i <= mAck
+                        THEN [log[s][i] EXCEPT !.decided = TRUE]
+                        ELSE log[s][i]] \* Deciding all the acked entries
+        IN log' = [log EXCEPT ![s] = 
+                    IF inst.val = Nil \/ IsNoOP(inst.val)
+                    THEN updLog
+                    ELSE IF ni \in DOMAIN log[s]
+                         THEN [updLog EXCEPT ![ni].nAcpt = inst.nAcpt, ![ni].decided = inst.decided]
+                    ELSE updLog @@ (ni :> inst)]
+
+SendReadAndWriteResponse(s, id, ni, val, m, decided, mAck, isMid) ==
+    LET latestCommittedInst == MAX({i \in DOMAIN log[s] : /\ log[s][i].val \in Val
+                                                          /\ i <= mAck \/ log[s][i].decided })
+        latestCommittedVal == IF /\ val \in Val
+                                 /\ decided
+                                 /\ ni > latestCommittedInst
+                              THEN val 
+                              ELSE IF latestCommittedInst = 0 THEN Nil
+                              ELSE log[s][latestCommittedInst].val
+        readResponses ==
+            {[type |-> "ReadResponse", id |-> i,
+                val |-> latestCommittedVal] :
+                i \in UNION {readQueue[s][j] :
+                    j \in {k \in DOMAIN readQueue[s] : k <= mAck}}}
+        writeResponse == [type |-> "WriteResponse",
+                          id   |-> id]
+    IN  IF isMid
+        THEN msgs' = msgs \union readResponses \union {writeResponse}
+        ELSE msgs' = msgs \union readResponses
+
+MsgToFwd(s, d, ni, inst, mAck) ==
+    \* Leader could also change here
+    \* do conisder that case as well
+    \* when term change be careful about inst.na can consist old term
+    IF d = csleader[s]
+    THEN [type |-> "AcceptAck",
+          ni   |-> ni]
+    ELSE [type   |-> "Accept",
+          ni     |-> ni,
+          ldr    |-> csleader[s],
+          na     |-> inst.na,
+          id     |-> inst.id,
+          val    |-> inst.val,
+          nAcpt  |-> inst.nAcpt,
+          mAck   |-> mAck]
+
+Forward(s, newNextOk, ni, inst, mAck) ==
+
+    \* When Forwarding the Accpet messsage: mAck = m.mAck
+    \* When Re-propagate the instances: mAck = maxAck[s]
+    \* It could possible that, \/ m.mAck >= maxAck[s]
+    \*                         \/ m.mAck <= maxAck[s] (Only for s=1 and if AccpetAck are appended in the front of buf)
+    LET newBuf == IF s = cnextok[s]
+                  THEN [buf EXCEPT ![s]=Append(Tail(@), MsgToFwd(s, s, ni, inst, mAck))]
+                  ELSE [buf EXCEPT 
+                            ![s] = Tail(@),
+                            ![cnextok[s]] = Append(@, MsgToFwd(s, cnextok[s], ni, inst, mAck))]
+
+    IN IF cnextok[s] = newNextOk \* Nothing happened
+       THEN buf' = newBuf
+       ELSE IF s = newNextOk THEN buf' = [newBuf EXCEPT ![s]=Append(@, MsgToFwd(s, s, ni, inst, mAck))]
+       ELSE LET maXAck == MAX({mAck, maxAck[s]})
+                instsIdx == SetToSeqAsc({i \in DOMAIN log[s] : i > maXAck})
+                insts == [j \in 1..Len(instsIdx) |-> 
+                            MsgToFwd(s, newNextOk, instsIdx[j], log[s][instsIdx[j]], maxAck[s])]
+
+            IN buf' = [newBuf EXCEPT ![newNextOk] = @ \o Append(insts, MsgToFwd(s, newNextOk, ni, inst, mAck))]
+            \* IN buf' = [newBuf EXCEPT ![newNextOk] = Append(@, MsgToFwd(s, newNextOk, ni, inst, mAck))]
+
+-----------------------------------------------------------------------------
 
 RecvAccept(s) ==
+    /\ IsFunctioning(s) \* Should've MinQuoromSize nodes
     /\ buf[s] # << >>
     /\ LET m == Head(buf[s])
        IN /\ m.type = "Accept"
-          /\ np[s] <= m.na
-          \* Remove all entries waiting on maxAck upto m.mAck from read queue
-          /\ readQueue' = [readQueue EXCEPT ![s] =
-                              [i \in {j \in DOMAIN @ : j > m.mAck} |-> @[i]]] 
+          /\ np[s] <= m.na \* Rejecting all the messages of older term
+
           /\ LET nAcpt == IF m.ni \in DOMAIN log[s]
                           THEN MAX({m.nAcpt+1, log[s][m.ni].nAcpt})
-                          ELSE m.nAcpt+1 
-                 decided == IsQuorum(nAcpt)
-                 mAck == m.mAck
-             IN /\ maxAck' = [maxAck EXCEPT ![s] = mAck]
-                /\  IF m.val \notin RemoveNode
-                    THEN pending' = [pending EXCEPT ![s] =
-                        IF np[s] < m.na THEN {}
-                        ELSE IF decided THEN @ \ {m.id}
-                                ELSE @]
-                    ELSE UNCHANGED pending             
-                /\ UpdateOrgVars(s, m.ldr, m.na, m.val, decided, m.mAck)
-                /\ IF IsNoOP(m.val)
-                   THEN UNCHANGED <<log>>
-                   ELSE log' = [log EXCEPT ![s] = [i \in DOMAIN log[s] |-> 
-                                    IF i <= m.mAck
-                                    THEN [log[s][i] EXCEPT !.decided = TRUE]
-                                    ELSE log[s][i]]
-                                @@ (m.ni :>
-                                  [id        |-> m.id,
-                                   val       |-> m.val,
-                                   nAcpt     |-> nAcpt,
-                                   decided   |-> decided])]
-                \* /\ log' = [log EXCEPT ![s] = [i \in DOMAIN log[s] |-> 
-                \*                     IF i <= m.mAck
-                \*                     THEN [log[s][i] EXCEPT !.decided = TRUE]
-                \*                     ELSE log[s][i]]
-                \*                 @@ (m.ni :>
-                \*                   [id        |-> m.id,
-                \*                    val       |-> m.val,
-                \*                    nAcpt     |-> nAcpt,
-                \*                    decided   |-> decided])]
+                          ELSE m.nAcpt+1
+                 mAck == MAX({m.mAck, maxAck[s]})
 
-                /\ LET latestCommittedInst == MAX({i \in DOMAIN log[s] : /\ i <= m.mAck \/ log[s][i].decided
-                                                                         /\ log[s][i].val \in Val })
-                       latestCommittedVal == IF /\ ~( IsNoOP(m.val) \/ IsRemNo(m.val) \/ IsAddNo(m.val) ) 
-                                                /\ decided /\ m.ni > latestCommittedInst
-                                             THEN m.val 
-                                             ELSE IF latestCommittedInst = 0 THEN Nil
-                                             ELSE log[s][latestCommittedInst].val
-                       readResponses ==
-                            {[type |-> "ReadResponse", id |-> i,
-                               val |-> latestCommittedVal] :
-                                i \in UNION {readQueue[s][j] :
-                                 j \in {k \in DOMAIN readQueue[s] : k <= m.mAck}}}
-                       writeResponse == [type |-> "WriteResponse",
-                                         id   |-> m.id]
+                 \* Apply all Membership Change upto mAck
+                 decidedOrgVars == GetDecidedOrgVars(s, m.na, mAck)
 
-                \* /\ LET latestCommittedInst == MAX({i \in DOMAIN log[s] :
-                \*             log[s][i].decided} \union {m.mAck})
-                \*        latestCommittedVal ==
-                \*             IF decided /\ m.ni > latestCommittedInst
-                \*             THEN m.val 
-                \*             ELSE log[s][latestCommittedInst].val
-                \*        readResponses ==
-                \*             {[type |-> "ReadResponse", id |-> i,
-                \*                val |-> latestCommittedVal] :
-                \*                 i \in UNION {readQueue[s][j] :
-                \*                  j \in {k \in DOMAIN readQueue[s] : k <= m.mAck}}}
-                \*        writeResponse == [type |-> "WriteResponse",
-                \*                          id   |-> m.id]
+                 \* Decide the current instance based on decided chain
+                 decided == IsQuorum(nAcpt, Cardinality(decidedOrgVars[2]) )
 
-                   IN IF /\ IsQuorum(m.nAcpt + 1)
-                         /\ ~IsQuorum(m.nAcpt)
-                         /\ ~( IsNoOP(m.val) \/ IsRemNo(m.val) )
-                      THEN msgs' = msgs \union readResponses \union {writeResponse}
-                      ELSE msgs' = msgs \union readResponses
-                /\ IF cnextok[s] = csleader[s]
-                   THEN Reply(s, csleader[s],
-                              [type |-> "AcceptAck",
-                               ni   |-> m.ni])
-                   ELSE Reply(s, cnextok[s],
-                              [type |-> "Accept",
-                               ni   |-> m.ni,
-                               ldr  |-> m.ldr,
-                               na   |-> m.na,
-                               id   |-> m.id,
-                               val  |-> m.val,
-                               nAcpt|-> nAcpt,
-                               mAck |-> mAck])
+                 \* New Org Variables
+                 newOrgVars == GetNewOrgVars(s, m.val, decided, decidedOrgVars[1], decidedOrgVars[2])
+                 newCnextok == newOrgVars[3]
+
+                 instance == [id      |-> m.id,
+                              val     |-> m.val,
+                              na      |-> m.na,
+                              nAcpt   |-> nAcpt,
+                              decided |-> decided]
+             IN 
+                \* UpdateLeaderINFO(ldr, np) & MarkForRemoval(r)           
+                /\ marked'  = [marked EXCEPT ![s] = newOrgVars[1]]
+                /\ chain'   = [chain EXCEPT ![s] = newOrgVars[2]]
+                /\ cnextok' = [cnextok EXCEPT ![s] = newCnextok]
+                /\ UpdateLeaderInfo(s, m.ldr, m.na, m.id, decided)
+
+                \* DECIDEANDGCUPTO(mAck)
+                /\ UpdateLogVars(s, m.ni, instance, mAck)
+
+                \* Should the node recieving it's own RemoveNode send a write response??
+                \* Not Sending the ReadResponse of the reads that are in the Removed node.
+                /\ IF \/ IsRemoved(s)
+                      \/ IsSelfRemv(s, m.val)
+                   THEN UNCHANGED <<readQueue, msgs>>
+                   ELSE \* Remove all entries waiting on maxAck upto m.mAck from read queue
+                        /\ readQueue' = [readQueue EXCEPT ![s] =
+                            [i \in {j \in DOMAIN @ : j > m.mAck} |-> @[i]]] 
+                        /\ LET isMid == /\ IsQuorum(m.nAcpt + 1, Cardinality(DOMAIN newOrgVars[2]))
+                                        /\ ~IsQuorum(m.nAcpt, Cardinality(DOMAIN newOrgVars[2]))
+                                        /\ m.val \in Val
+                           IN SendReadAndWriteResponse(s, m.id, m.ni, m.val, m, decided, mAck, isMid)
+
+                \* FORWARD(m)
+                \* IF RemoveNode of self got then don't forward it
+                \* Have to fix for adding Node when only Leader is there
+                \* Also the STATE TRANSFER
+                /\ IF IsSelfRemv(s, m.val)
+                   THEN buf' = [buf EXCEPT ![s]=Tail(@)]
+                   ELSE Forward(s, newCnextok, m.ni, instance, m.mAck)
+
           /\ UNCHANGED <<ops, maxAcpt, hisVars>>
 
 LeaderRecvAcceptAck(s) ==
+    /\ IsFunctioning(s)
     /\ s = csleader[s] 
     /\ buf[s] # << >>
     /\ LET m == Head(buf[s])
+           mAck == MAX({m.ni, maxAck[s]})
        IN /\ m.type = "AcceptAck"
           /\ PopMsg(s)
-          /\ maxAck' = [maxAck EXCEPT ![s] = m.ni]
-          /\ log' = [log EXCEPT ![s] =
-                            [i \in DOMAIN log[s] |->
-                                IF i <= m.ni
-                                THEN [log[s][i] EXCEPT !.decided = TRUE]
-                                ELSE log[s][i]]]
+          /\ UpdateLogVars(s, m.ni, [ val |-> Nil], mAck)
+
           /\ readQueue' = [readQueue EXCEPT ![s] =
-                                [i \in {j \in DOMAIN @ : j > m.ni} |-> @[i]]]
+                                [i \in {j \in DOMAIN @ : j > mAck} |-> @[i]]]
+          /\ SendReadAndWriteResponse(s, Nil, Nil, Nil, m, TRUE, mAck, FALSE)
 
-          /\ LET latestCommittedInst == IF m.ni \notin DOMAIN log[s]
-                                        THEN MAX({i \in DOMAIN log[s] : i < m.ni})
-                                        \* For Leader: commitIdx@T == ackedIdx@T
-                                        ELSE MAX({i \in DOMAIN log[s] : log[s][i].decided} \union {m.ni})
-
-        \*   /\ LET latestCommittedInst == MAX({i \in DOMAIN log[s] :
-        \*                                         log[s][i].decided}
-        \*                                             \union {m.ni})
-
-                 latestCommittedVal == IF latestCommittedInst = 0 THEN Nil
-                                       ELSE log[s][latestCommittedInst].val
-                 readResponses ==
-                    {[type |-> "ReadResponse", id |-> i, val |-> latestCommittedVal] :
-                            i \in UNION {readQueue[s][j] :
-                            j \in {k \in DOMAIN readQueue[s] : k <= m.ni}}}
-             IN msgs' = msgs \union readResponses
-          /\ UpdateOrgVars(s, s, np[s], Nil, FALSE, m.ni)
-    /\ UNCHANGED <<ops, np, leaderVars, hisVars>>
+          /\ UpdateOrgVars(s, s, np[s], Nil, FALSE, mAck)
+          /\ pending' = [pending EXCEPT ![s] = 
+                            IF m.ni \in DOMAIN log[s] 
+                            THEN @ \ { log[s][m.ni].id} 
+                            ELSE @]
+    /\ UNCHANGED <<ops, np, csleader, maxAcpt, hisVars>>
 
 RecvRead(s, m) ==
+    /\ IsFunctioning(s)
     /\ m.type = "ReadRequest"
     /\ RemoveMsg(m)
     /\ LET nextInst == MAX(DOMAIN log[s]) + 1
@@ -430,11 +504,13 @@ RecvRead(s, m) ==
                             ELSE @ @@ (nextInst :> {m.id})]
     /\ UNCHANGED <<ops, buf, orgVars, logVars, leaderVars, hisVars>>
 
-\* Node s suspects that node s+1 has failed
+\* Node s suspects that node cnextok[s] has failed
 SuspectNextNode(s) ==
+    /\ IsFunctioning(s)
     /\ cnextok[s] # csleader[s] \* Cannot suspect leader
-    /\ SendMsg([type |-> "RemoveNode", srv |-> s+1])
-    /\ removeNodeLog' = Append(removeNodeLog, s+1)
+    /\ ~IsRemoved(s)
+    /\ SendMsg([type |-> "RemoveNode", srv |-> cnextok[s]])
+    /\ removeNodeLog' = Append(removeNodeLog, cnextok[s])
     /\ UNCHANGED <<ops, serverVars, noopLog>>
 
 -----------------------------------------------------------------------------
@@ -470,6 +546,6 @@ LogInv == \A s \in Server :
 
 =============================================================================
 \* Modification History
+\* Last modified Sat Jun 28 14:53:49 IST 2025 by jay
 \* Last modified Tue May 06 18:06:03 IST 2025 by Kotikala Raghav
-\* Last modified Wed Apr 23 22:54:06 IST 2025 by jay
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav
