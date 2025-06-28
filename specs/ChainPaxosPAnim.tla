@@ -81,12 +81,15 @@ client == Group(<<
 msgsReq(m) == IF m.type = "WriteRequest" THEN "WReq"
                 ELSE IF m.type = "WriteResponse" THEN "WRes"
                 ELSE IF m.type = "ReadRequest" THEN "RReq"
+                ELSE IF m.type = "RemoveNode" THEN "Remove"
+                ELSE IF m.type = "AddNode" THEN "Add"
                 ELSE "RRes"
 
 msgsVal(m) == IF m.type = "WriteRequest" \/ m.type = "ReadResponse"
                 THEN IF m.val = Nil THEN ToString(m.id) \o " | Nil"
                      ELSE ToString(m.id) \o " | " \o ToString(m.val)
                 ELSE IF m.type = "ReadRequest" THEN ToString(m.id) \o " | " \o "?"
+                ELSE IF m.type = "RemoveNode" \/ m.type = "AddNode" THEN ToString(m.srv)
                 ELSE ToString(m.id)
 
 msgsFill(m) == IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
@@ -99,10 +102,12 @@ msgsText(m) == IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
 
 msgsStroke(m) ==  IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
                     THEN "orange"
+                    ELSE IF m.type = "RemoveNode" THEN "red"
+                    ELSE IF m.type = "AddNode" THEN "skyblue"
                     ELSE "green"
 
 msgsReqEntry(xbase, ybase, m) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> msgsFill(m) @@ "stroke" :> msgsStroke(m))), 
-                                   Text(xbase + 15, ybase + 8, msgsReq(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 8, msgsReq(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "7px")>>, [l \in {} |-> {}])
 msgsValEntry(xbase, ybase, m) == Group(<<Rect(xbase + 1, ybase + 10, 28, 10, ("fill" :> msgsFill(m) @@ "stroke" :> msgsStroke(m))), 
                                    Text(xbase + 15, ybase + 18, msgsVal(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 
@@ -177,15 +182,18 @@ readqElems ==  [i \in Server |->
 ----------------------------------------
 \* Buffer Elements
 
-bufReq(id,ind) == IF buf[id][ind].type = "Accept" THEN "Acpt"
-               ELSE "AcAck"
+bufReq(id,ind) == IF buf[id][ind].type = "Accept" THEN
+                    IF buf[id][ind].val \in RemoveNode THEN "Rmv(" \o ToString(buf[id][ind].val.srv) \o ")"
+                    ELSE IF buf[id][ind].val \in AddNode THEN "Add(" \o ToString(buf[id][ind].val.srv) \o ")"
+                    ELSE "Acpt(" \o ToString(buf[id][ind].ni) \o ")"
+                  ELSE "AcAck"
 
 bufVal(id,ind) == IF buf[id][ind].type = "Accept"
-               THEN ToString(buf[id][ind].mAck) \o " | " \o ToString(buf[id][ind].ni) 
+               THEN ToString(buf[id][ind].mAck) \o " | " \o ToString(buf[id][ind].nAcpt) 
                ELSE ToString(buf[id][ind].ni)
 
 bufReqEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
-                                   Text(xbase + 15, ybase + 8, bufReq(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
+                                   Text(xbase + 15, ybase + 8, bufReq(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "7px")>>, [l \in {} |-> {}])
 bufValEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 1, ybase + 10, 28, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
                                    Text(xbase + 15, ybase + 18, bufVal(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 
@@ -200,12 +208,12 @@ logEntryFill(id,ind) == IF ind <= maxAck[id] THEN "lightgreen"
                           ELSE IF log[id][ind].decided THEN "orange"
                           ELSE "lightgray"
                           
-logEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, ("fill" :> logEntryFill(id,ind) @@ "stroke" :> "black")),
-                                   Text(xbase + 33, ybase + 8, ToString(log[id][ind].val), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
+logEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, [fill |-> logEntryFill(id,ind), stroke |-> IF log[id][ind].val \in RemoveNode THEN "red" ELSE "black"]), 
+                                   Text(xbase + 33, ybase + 8, IF log[id][ind].val \in RemoveNode THEN ToString(log[id][ind].val.srv) ELSE ToString(log[id][ind].val), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 \* logElem(id, xbase, ybase) == Group([ind \in DOMAIN log[id] |-> logEntry(id, xbase + 12 * (ind-1), ybase, ind)], [l \in {} |-> {}])
 logElem(id, xbase, ybase) ==
   LET indSeq == SetToSeq(DOMAIN log[id]) IN
-  Group( [k \in DOMAIN indSeq |-> logEntry(id, xbase + 12*(k-1), ybase, indSeq[k])], [l \in {} |-> {}])
+  Group( [k \in DOMAIN indSeq |-> logEntry(id, xbase + 12*(indSeq[k]-1), ybase, indSeq[k])], [l \in {} |-> {}])
 
 logElems ==  [i \in Server |-> logElem(i, XBase, YBase + (i-1) * Spacing + 12)]
 
@@ -223,12 +231,15 @@ TextFill(i) == IF i \in marked[i] THEN "white"
                ELSE IF csleader[i] = i THEN "black" 
                ELSE "lightgray"
 
+IfRemoved(i) == \/ i \in marked[i]
+                \/ i \notin { chain[i][t] : t \in DOMAIN chain[i] }
+
 cs == [i \in Server |-> 
         LET id == ToString(i) IN
         Group(<<
             Circle(XBase + 15, YBase + (i-1) * Spacing + 17, 9, 
             [stroke |-> "black", fill |->
-                IF i \in marked[i] THEN "red"
+                IF IfRemoved(i) THEN "red"
                 ELSE IF csleader[i] = i THEN "gold" 
                 ELSE "gray"]),
             Text(XBase + 15, YBase + (i-1) * Spacing + 20, id, ("fill" :> TextFill(i) @@ "text-anchor" :> "middle" @@ "font-size" :> "9px"))>>,
@@ -277,6 +288,7 @@ Next ==
     \/ \E s \in Server : \E m \in msgs : RecvRead(s, m) /\ UNCHANGED <<h, p>>
     \/ \E m \in msgs : ClientRecvWrite(m) /\ UNCHANGED <<h, p>>
     \/ \E m \in msgs : ClientRecvRead(m) /\ UNCHANGED <<h, p>>
+    \/ \E s \in Server : SuspectNextNode(s) /\ UNCHANGED <<h, p>>
 
 =============================================================================
 \* Modification History
