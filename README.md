@@ -1,17 +1,19 @@
 <!-- # TLA<sup>+</sup> Web Explorer -->
-# Spectacle <img src="assets/glassestall3.png" height=31 alt="Spectacle logo" style="vertical-align: middle">
+# Spectacle 
+
+<!-- <img src="assets/glassestall3.png" height=31 alt="Spectacle logo" style="vertical-align: middle"> -->
 
 <!-- <img src="assets/glasses-svgrepo-com.svg" width="50" height="20" alt="Spectacle logo" style="vertical-align: middle"> -->
 
 
 Spectacle is an interactive, web-based tool for exploring, visualizing, and sharing formal specifications written in the [TLA<sup>+</sup> specification language](https://lamport.azurewebsites.net/tla/tla.html).  The motivation is to have a better way to quickly interact with a formal specification and easily share results. For example, it provides a way to share protocol behaviors and counterexample traces in a convenient, portable, and repeatable manner. 
 
- A live version of the tool is currently hosted [here](https://will62794.github.io/spectacle/#!/home), and below are some example specifications to try out:
+The tool implements a [full TLA+ interpreter in Javascript](https://github.com/will62794/spectacle/blob/master/js/eval.js), building on top of the [TLA+ tree-sitter grammar](https://github.com/tlaplus-community/tree-sitter-tlaplus) for parsing specifications. This allows for interactive exploration of specs natively in the browser, without reliance on an external language server. A live version is hosted [here](https://will62794.github.io/spectacle/#!/home), and below are some example specifications to try out:
 
 - [Lock server](https://will62794.github.io/spectacle/#!/home?specpath=.%2Fspecs%2Flockserver.tla&constants%5BServer%5D=%7B%22s1%22%2C%20%22s2%22%7D&constants%5BClient%5D=%7B%22c1%22%2C%20%22c2%22%7D)
 - [Cabbage Goat Wolf Puzzle](https://will62794.github.io/spectacle/#!/home?specpath=.%2Fspecs%2FCabbageGoatWolf.tla) (animated)
 - [Distributed termination detection (EWD998)](https://will62794.github.io/spectacle/#!/home?specpath=.%2Fspecs%2FEWD998.tla&constants%5BN%5D=3) (animated)
-- [Two phase commit](https://will62794.github.io/spectacle/#!/home?specpath=.%2Fspecs%2FTwoPhase_anim.tla&constants%5BRM%5D=%7Brm1%2Crm2%7D) (animated)
+- [Two phase commit](https://will62794.github.io/spectacle/#!/home?specpath=.%2Fspecs%2FTwoPhase_anim.tla&constants%5BRM%5D=%7Brm1%2Crm2%2Crm3%7D) (animated)
 - [Paxos](https://will62794.github.io/spectacle/#!/home?specpath=.%2Fspecs%2FPaxos.tla&constants%5BServer%5D=%7B%22s1%22%2C%22s2%22%2C%20%22s3%22%7D&constants%5BSecondary%5D=%22Secondary%22&constants%5BPrimary%5D=%22Primary%22&constants%5BNil%5D=%22Nil%22&constants%5BInitTerm%5D=0&constants%5BAcceptor%5D=%7Ba1%2Ca2%2Ca3%7D&constants%5BQuorum%5D=%7B%7Ba1%2Ca2%7D%2C%7Ba2%2Ca3%7D%2C%7Ba1%2Ca3%7D%2C%7Ba1%2Ca2%2Ca3%7D%7D&constants%5BProposer%5D=%7Bp1%2Cp2%7D&constants%5BValue%5D=%7Bv1%2Cv2%7D&constants%5BBallot%5D=%7B0%2C1%2C2%2C3%7D&constants%5BNone%5D=None)
 - [FlexiblePaxos](https://will62794.github.io/spectacle/#!/home?specpath=.%2Fspecs%2FFlexiblePaxos.tla&constants%5BValue%5D=%7Bv1%2Cv2%7D&constants%5BAcceptor%5D=%7Ba1%2Ca2%7D&constants%5BQuorum1%5D=%7B%7Ba1%7D%2C%20%7Ba2%7D%7D&constants%5BQuorum2%5D=%7B%7Ba1%2Ca2%7D%7D&constants%5BBallot%5D=%7B0%2C1%2C2%2C3%7D)
 - [Raft](https://will62794.github.io/spectacle/#!/home?specpath=.%2Fspecs%2FAbstractRaft_anim.tla&constants%5BServer%5D=%7Bs1%2Cs2%2C%20s3%7D&constants%5BSecondary%5D="Secondary"&constants%5BPrimary%5D="Primary"&constants%5BNil%5D="Nil"&constants%5BInitTerm%5D=0) (animated)
@@ -25,8 +27,6 @@ You can also explore some interesting (and infamous) traces of different protoco
 - [Read-only anomaly under snapshot isolation](https://will62794.github.io/spectacle/#!/home?specpath=https%3A%2F%2Fraw.githubusercontent.com%2Fwill62794%2Fsnapshot-isolation-spec%2Frefs%2Fheads%2Fmaster%2FSnapshotIsolation.tla&constants%5BtxnIds%5D=%7Bt0%2Ct1%2Ct2%7D&constants%5Bkeys%5D=%7Bk1%2Ck2%7D&constants%5Bvalues%5D=%7Bv1%2Cv2%7D&constants%5BEmpty%5D=%22Empty%22&trace=4d9d875e%2C27dfd06a%2C639eed1f%2C4cb5a71b%2C4708fef8%2C429a81d3%2Ce9311886%2C7478057a%2C2ea8cbe7%2C6a3128ec%2Cd2bef298%2C071ae0d9) (Snapshot Isolation)
 
 
-
-The tool implements a [full TLA+ interpreter in Javascript](https://github.com/will62794/spectacle/blob/master/js/eval.js), building on top of the [TLA+ tree-sitter grammar](https://github.com/tlaplus-community/tree-sitter-tlaplus) for parsing specifications. This allows for interactive exploration of specs natively in the browser, without reliance on an external language server. 
 
 <!-- The Javascript interpreter is likely slower than TLC, but highly efficient model checking isn't currently a goal of the tool.  -->
 

@@ -6,6 +6,8 @@ let tree;
 let parser;
 let languageName = "tlaplus";
 
+let vizInstance = null;
+
 let Pane = {
     Constants: 1,
     Trace: 2
@@ -58,7 +60,7 @@ let model = {
     replResult: null,
     replError : false,
     constantsPaneHidden: false,
-    selectedTab: Tab.SpecEditor,
+    selectedTab: Tab.StateSelection,
     selectedTraceTab: TraceTab.Trace,
     rootModName: "",
     debug: false,
@@ -78,7 +80,13 @@ let model = {
     invariantExprToCheck: "",
     invariantViolated: false,
     invariantCheckerRunning: false,
-    invariantCheckingDuration: 0
+    invariantCheckingDuration: 0,
+    // Trace loading state
+    traceLoadingWorker: null,
+    traceLoadingInProgress: false,
+    traceLoadingProgress: { currentState: 0, totalStates: 0 }, // 0-100
+    traceLoadingError: null,
+    traceLoadingStart: null
 }
 
 const exampleSpecs = {
@@ -180,6 +188,19 @@ const exampleSpecs = {
             "Consumers": "{c}",
             "BufCapacity": 1
         }
+    },
+    "Battery Relay (animated)": {
+        specpath: "./specs/BatteryRelay.tla",
+        constant_vals: {
+            "Cost": "[ Truck |-> 10, Car |-> 5, Bike |-> 2, Scooter |-> 1 ]",
+            "MaxLevel": 17
+        }
+    },
+    "Dining Philosophers (animated)": {
+        specpath: "./specs/DiningPhilosophers.tla",
+        constant_vals: {
+            "N": 5
+        }
     }
 
 };
@@ -277,51 +298,41 @@ function displayEvalGraph(nodeGraph) {
         style: [
             {
                 selector: 'node',
-                // shape: "barrel",
-                size: "auto",
                 style: {
                     'label': function (el) {
-                        // return el.data()["expr_text"].replaceAll("\n", "");
-                        // if(el.data().expr_text.includes("' = ")) {
-                            // let cleanStr = el.data()["expr_text"].replaceAll("\n", "");
-                            // cleanStr.indexOf("' = ");
-                            // let ret = cleanStr.substring(0,cleanStr.indexOf("' = ") + 1);
-                            // if (ret.length < 100){
-                            if(el.data().expr_type === "bound_infix_op"){
-                                return "(" + el.data().expr_type + ") " + el.data().expr_text
-                            }
-                            if(el.data().expr_type === "function_evaluation"){
-                                return "(" + el.data().expr_type + ") " + el.data().expr_text
-                            }
-                            return el.data().expr_type;
-                            // }
-                            // return el.data()["expr_text"].replaceAll("\n", "");
-                        // }
-                        // return "";
+                        // Only show expression type in the main label
+                        return el.data().expr_type;
                     },
-                    // "width": function(el){
-                    //     console.log(el);
-                    //     return el.data().expr_text.length * 10 + 20;
-                    // },
-                    "width": 15,
-                    "height": 15,
+                    // Make nodes wider to accommodate text
+                    "width": function(el) {
+                        // Calculate width based on text length, with minimum size
+                        let textLength = el.data().expr_type.length;
+                        return Math.max(15, textLength * 8);
+                    },
+                    "height": 20,
                     "background-color": function(el){
                         if(el.data().expr_type === "conj_list"){
-                            return "orange";
+                            return "#FFD699"; // Light orange
                         }
                         if(el.data().expr_text.includes("' = ")) {
-                            return "red";
+                            return "#FFB3B3"; // Light red
                         }
-                        return "blue";
+                        return "#B3D9FF"; // Light blue
                     },
                     "text-valign": "center",
-                    // "text-halign": "center",
+                    "text-halign": "center",
+                    "text-wrap": "wrap",
+                    "text-max-width": function(el) {
+                        // Allow text to wrap within node width
+                        return el.width() - 4;
+                    },
                     "border-style": "solid",
                     "border-width": "1",
                     "border-color": "gray",
                     "font-family": "monospace",
                     "font-size": "8px",
-                    "shape": "rectangle"
+                    "shape": "rectangle",
+                    "padding": "2px"
                 }
             },
         ]
@@ -351,7 +362,6 @@ function displayEvalGraph(nodeGraph) {
                 id: 'e' + eind,
                 source: hashSum(edge[0].textId),
                 target: hashSum(edge[1].textId),
-                // label: retVal[0]["val"].toString() + " " + edgeOrder + "(" + retVal.length + ") [" + evalDur + "ms]"
                 label: edgeOrder + "(" + retVal.length + ") [" + evalDur + "ms]"
             }
         });
@@ -368,10 +378,46 @@ function displayEvalGraph(nodeGraph) {
             return el.data().label;
         }
     })
-    // let layout = cy.layout({name:"cose"});
-    // let layout = cy.layout({ name: "breadthfirst" });
+
+    // Add tooltips for nodes
+    cy.on('mouseover', 'node', function(evt) {
+        let node = evt.target;
+        let tooltip = document.createElement('div');
+        tooltip.className = 'cytoscape-tooltip';
+        tooltip.style.position = 'absolute';
+        tooltip.style.backgroundColor = 'white';
+        tooltip.style.border = '1px solid #ccc';
+        tooltip.style.padding = '5px';
+        tooltip.style.borderRadius = '3px';
+        tooltip.style.fontFamily = 'monospace';
+        tooltip.style.fontSize = '12px';
+        tooltip.style.zIndex = '1000';
+        tooltip.style.maxWidth = '300px';
+        tooltip.style.wordWrap = 'break-word';
+        tooltip.innerHTML = node.data('expr_text');
+        
+        document.body.appendChild(tooltip);
+        
+        function updateTooltipPosition() {
+            let pos = node.renderedPosition();
+            let containerPos = stategraphDiv.getBoundingClientRect();
+            tooltip.style.left = (containerPos.left + pos.x + 10) + 'px';
+            tooltip.style.top = (containerPos.top + pos.y - 10) + 'px';
+        }
+        
+        updateTooltipPosition();
+        node.on('position', updateTooltipPosition);
+    });
+
+    cy.on('mouseout', 'node', function(evt) {
+        let tooltip = document.querySelector('.cytoscape-tooltip');
+        if (tooltip) {
+            tooltip.remove();
+        }
+        evt.target.removeListener('position');
+    });
+
     let layout = cy.layout({ name: "dagre", nodeDimensionsIncludeLabels: true });
-    // let layout = cy.layout({ name: "elk" });
     cy.resize();
     layout.run();
 }
@@ -413,21 +459,23 @@ function componentChooseConstants(hidden) {
                     m("input", {
                         class: "form-control form-control-sm",
                         id: `const-val-input-${constDecl}`,
+                        "data-testid": `const-val-input-${constDecl}`,
                         style: {
-                            "width": "220px"
+                            "width": "200px",
+                            "font-size": "13px"
                         },
                         oninput: (e) => model.specConstInputVals[constDecl] = e.target.value,
                         value: model.specConstInputVals[constDecl],
-                        placeholder: "Enter TLA+ value."
+                        placeholder: "Enter constant value."
                     }),
                     m("div", { class: "input-group-append" }, [ 
                     m("button", {
                         class: "btn btn-outline-secondary btn-sm",
                         style: {
-                            "font-size": "14px"
+                            "font-size": "13px"
                         },
                             onclick: () => setConstantAsModelValue(constDecl)
-                        }, "Model Value")
+                        }, "ModelValue")
                     ])
                 ])
             ])
@@ -447,6 +495,7 @@ function componentChooseConstants(hidden) {
     function constantButtons(){
         let setButtonDiv = m("button", { 
             id: "set-constants-button", 
+            "data-testid": "set-constant-config-button",
             class: "btn btn-sm btn-primary", 
             onclick: () => {
                 setConstantValues();
@@ -521,6 +570,7 @@ function componentNextStateChoiceElementForAction(ind, actionLabel, nextStatesFo
         return m("div", 
         { 
             class: classList.join(" "), 
+            "data-testid": "action-choice-param",
             // colspan: 2,
             onclick: () => chooseNextState(hash, hashQuantBounds(quantBounds)),
             // onmouseover: () => {
@@ -543,11 +593,15 @@ function componentNextStateChoiceElementForAction(ind, actionLabel, nextStatesFo
     if(actionDisabled){
         classList.push("action-choice-disabled");
     }
+    if(actionLabelObj.params.length === 0 && !actionDisabled){
+        classList.push("blue-hover");
+    }
     let actionNameDiv = [m("div", {
         class: classList.join(" "),
         onclick: function () {
             if (!actionDisabled && actionLabelObj.params.length == 0) {
                 let hash = nextStatesForAction[0]["state"].fingerprint();
+                console.log("choose next hash:", hash);
                 chooseNextState(hash);
             }
         }
@@ -575,8 +629,9 @@ function componentNextStateChoiceElementForAction(ind, actionLabel, nextStatesFo
         style: `opacity: ${opac}%`,
         onclick: function () {
             if (actionLabelObj.params.length == 0) {
-                let hash = nextStatesForAction[0]["state"].fingerprint();
-                chooseNextState(hash);
+                // let hash = nextStatesForAction[0]["state"].fingerprint();
+                // console.log("choose nhhhhhhhhhext hash:", hash);
+                // chooseNextState(hash);
             }
         }        // onmouseover: () => {
         //     model.nextStatePreview = state;
@@ -639,6 +694,7 @@ function componentNextStateChoiceElement(stateObj, ind, actionLabel, diffOnly) {
     let nextStateElem = m("div", {
         class: "init-state next-state-choice-full",
         style: `opacity: ${opac}%`,
+        "data-testid": "next-state-choice",
         onclick: () => chooseNextState(hash),
         // onmouseover: () => {
         //     model.nextStatePreview = state;
@@ -660,7 +716,8 @@ function errorMsgStr(errorObj) {
 
 function componentErrorInfo() {
     let errorInfo = m("div", {
-        class: "error-info",
+        class: "error-info alert alert-danger",
+        role: "alert",
         hidden: model.errorObj === null
     }, errorMsgStr(model.errorObj));
     return errorInfo;
@@ -732,6 +789,17 @@ function componentNextStateChoices(nextStates) {
     return m("table", { width: "98%" }, outRows);
 }
 
+
+function recomputeInitStates(){
+    let interp = new TlaInterpreter();
+    let includeFullCtx = true;
+    initStates = interp.computeInitStates(model.specTreeObjs, model.specConstVals, includeFullCtx, model.spec);
+    initStates = initStates.map(c => ({"state": c["state"], "quant_bound": c["quant_bound"]}))
+    model.allInitStates = _.cloneDeep(initStates);
+    console.log("Set initial states: ", model.allInitStates);
+    return initStates;
+}
+
 function recomputeNextStates(fromState) {
     let interp = new TlaInterpreter();
     let nextStates;
@@ -800,7 +868,9 @@ function traceStepBack() {
     // Back to initial states.
     if (model.currTrace.length === 0) {
         console.log("Back to initial states.")
-        reloadSpec();
+        console.log("stepping back");
+        let nextStates = recomputeInitStates();
+        model.currNextStates = _.cloneDeep(nextStates);
         return;
     } else {
         console.log("stepping back");
@@ -987,7 +1057,7 @@ function setConstantValues(reload = true) {
     for (var constDecl in model.specConsts) {
         let constValText = model.specConstInputVals[constDecl];
         if (constValText === undefined) {
-            throw "no constant value given for " + constDecl;
+            throw "no value given for '" + constDecl + "' CONSTANT";
         }
         // console.log("constDecl:", constDecl, constValText);
         constVals[constDecl] = constValText;
@@ -1103,11 +1173,7 @@ function reloadSpec() {
     // let allInitStates;
     let initStates;
     try {
-        let includeFullCtx = true;
-        initStates = interp.computeInitStates(model.specTreeObjs, model.specConstVals, includeFullCtx, model.spec);
-        initStates = initStates.map(c => ({"state": c["state"], "quant_bound": c["quant_bound"]}))
-        model.allInitStates = _.cloneDeep(initStates);
-        console.log("Set initial states: ", model.allInitStates);
+        initStates = recomputeInitStates();
     } catch (e) {
         console.error(e);
         console.error("Error computing initial states.");
@@ -1141,19 +1207,59 @@ function reloadSpec() {
 function tlaValView(tlaVal, prevTlaVal = null) {
     if (tlaVal instanceof FcnRcdValue) {
         let valPairs = _.zip(tlaVal.getDomain(), tlaVal.getValues());
-        let borderStyle = { style: "border:solid 0.5px gray" };
-        return m("table", valPairs.map(p => {
+
+        // If the previous value was not a function/record, then just diff the whole thing.
+        let wholeDiff = false;
+        if(prevTlaVal !== null && !(prevTlaVal instanceof FcnRcdValue)){
+            wholeDiff = true;
+        }
+
+        // If domains of old and new val are the same, then show the diff of their sub-values.
+        let domainsMatch = false;
+        if (prevTlaVal !== null && (prevTlaVal instanceof FcnRcdValue) && prevTlaVal.getDomain().length === tlaVal.getDomain().length && 
+                        _.isEqual(prevTlaVal.getDomain().map(v => v.fingerprint()), tlaVal.getDomain().map(v => v.fingerprint()))) {
+            // valPairs = _.zip(prevTlaVal.getValues(), tlaVal.getValues());
+            domainsMatch = true;
+        }
+
+        let borderStyle = { style: "border:solid 0.5px gray;vertical-align:middle" };
+        return m("table", {style: {"background-color": wholeDiff ? "lightyellow" : "none"}}, valPairs.map(p => {
             let key = p[0];
             let val = p[1];
             // If checking for diff, do it now.
             let diff = false;
-            if (prevTlaVal !== null && prevTlaVal.applyArg(key).fingerprint() !== val.fingerprint()) {
+            let prevKeyVal = null;
+            if (prevTlaVal !== null && (prevTlaVal instanceof FcnRcdValue) && prevTlaVal.argInDomain(key) && prevTlaVal.applyArg(key).fingerprint() !== val.fingerprint()) {
                 diff = true;
+                prevKeyVal = prevTlaVal.applyArg(key);
+                // console.log("prevKeyVal:", prevKeyVal);
             }
+            let addedKey = false;
+            if(prevTlaVal !== null && (prevTlaVal instanceof FcnRcdValue)&& !prevTlaVal.argInDomain(key)){
+                addedKey = true;
+            }
+
+            let bgColor = diff && !domainsMatch ? "lightyellow" : "none";
+
+            // TODO: Improve handling of highlighting for newly added keys.
+            if(addedKey){
+                bgColor = "#eaffde";
+            }
+
+            // If key value is not a function/record itself, then let's highlight the cell.
+            let keyVal = val;
+            if(!(keyVal instanceof FcnRcdValue) && diff){
+                // keyVal = val;
+                bgColor = "lightyellow";
+            }
+
             return m("tr", borderStyle, [
                 m("td", borderStyle, key.toString()),
                 // TOOD: Uniform diff styling.
-                m("td", {style: {"background-color": diff? "lightyellow" : "none"}},tlaValView(val)), // TODO: do we want to recursively apply?
+                m("td", {style: {
+                    "background-color": bgColor, 
+                    "vertical-align": "middle"
+                }}, tlaValView(val, prevKeyVal)), // TODO: do we want to recursively apply?
             ]);
         }));
     }
@@ -1168,9 +1274,12 @@ function tlaValView(tlaVal, prevTlaVal = null) {
         // If all elements are short, just display the set as a string.
         let elemLengths = tlaVal.getElems().map((v, idx) => v.toString().length)
         let maxLength = _.max(elemLengths);
+        let diff = prevTlaVal !== null && prevTlaVal.fingerprint() !== tlaVal.fingerprint();
+
         let SHORT_SET_ELEM_DISPLAY_LEN = 4;
         if (maxLength <= SHORT_SET_ELEM_DISPLAY_LEN) {
-            return m("span", tlaVal.toString());
+            let style = {"background-color": diff ? "lightyellow" : "none"};
+            return m("span", {style: style}, tlaVal.toString());
         }
 
         let setElems = tlaVal.getElems().map((v, idx) => {
@@ -1193,15 +1302,23 @@ function tlaValView(tlaVal, prevTlaVal = null) {
             ]);
         });
 
-        return m("table", setElems);
+        let style = {"background-color": diff ? "lightyellow" : "none"};
+        return m("table", {style: style}, setElems);
     }
 
     // Display tuples as lists of their items.
     if (tlaVal instanceof TupleValue) {
         const SHORT_TUPLE_ELEM_DISPLAY_LEN = 30;
 
+        let diff = false;
+        if(prevTlaVal !== null && (prevTlaVal instanceof TupleValue) && prevTlaVal.fingerprint() !== tlaVal.fingerprint()){
+            diff = true;
+        }
+
+        let style = {style: {"background-color": diff ? "lightyellow" : "none"}};
+
         if (tlaVal.getElems().length === 0) {
-            return m("span", "<<>>"); // empty set.
+            return m("span", style, "<<>>"); // empty set.
         }
         let borderStyle = { style: "border:solid 0.5px gray" };
 
@@ -1216,24 +1333,87 @@ function tlaValView(tlaVal, prevTlaVal = null) {
 
         // If tuple is short enough, we will just display it as a string.
         if(tlaVal.toString().length > SHORT_TUPLE_ELEM_DISPLAY_LEN){
-            return m("table", tupleElems);
+            return m("table", style, tupleElems);
         }
 
-        return m("table", [m("tr", m("td", tlaVal.toString()))]);
+        return m("table", style, [m("tr", m("td", tlaVal.toString()))]);
     }
 
-    return m("span", tlaVal.toString());
+    let style = {};
+    if (prevTlaVal !== null && prevTlaVal.fingerprint() !== tlaVal.fingerprint()) {
+        style = {
+            "background-color": "lightyellow"
+        };
+    }
+
+    return m("span", {style: style}, tlaVal.toString());
 }
 
 
 //
-// Animation view logic (experimental).
+// Animation view logic.
 //
 function makeSvgAnimObj(tlaAnimElem) {
     let name = tlaAnimElem.applyArg(new StringValue("name")).getVal();
     let attrs = tlaAnimElem.applyArg(new StringValue("attrs"));
     let innerText = tlaAnimElem.applyArg(new StringValue("innerText"));
     let children = tlaAnimElem.applyArg(new StringValue("children"));
+
+
+    // Experimental Graphviz visualization elemen support.
+    if (name === "digraph") {
+        // console.log("tlaAnimElem:", tlaAnimElem);
+
+        let nodes = attrs.applyArg(new StringValue("V"));
+        let edges = attrs.applyArg(new StringValue("E"));
+        let nodeAttrsFn = attrs.applyArg(new StringValue("nodeAttrsFn"));
+        console.log(attrs)
+        let edgeAttrsFn = attrs.applyArg(new StringValue("edgeAttrsFn"));
+
+        // console.log("nodes:", nodes);
+        // console.log("edges:", edges);
+        // console.log("labelFn:", labelFn);
+
+        let graphvizStr = `digraph {\n`;
+        // Add nodes and any attributes.
+        for (let i = 0; i < nodes.getElems().length; i++) {
+            let node = nodes.getElems()[i];
+            let nodeStr = node.toString();
+
+            console.log(nodeAttrsFn.getDomain())
+
+            let nodeAttrsObj = {};
+            nodeAttrsFn.applyArg(node).getDomain().forEach(v => {
+                let val = nodeAttrsFn.applyArg(node).applyArg(v);
+                nodeAttrsObj[v.getVal()] = val.getVal();
+            });
+
+            let nodeAttrsStr = Object.entries(nodeAttrsObj).map(([key, value]) => `${key}="${value}"`).join(",");
+            graphvizStr += `  ${nodeStr} [${nodeAttrsStr}];\n`;
+        }
+
+        // Add edges and any attributes.
+        for (let i = 0; i < edges.getElems().length; i++) {
+            let edge = edges.getElems()[i];
+            let edgeAttrsObj = {};
+            edgeAttrsFn.applyArg(edge).getDomain().forEach(v => {
+                let val = edgeAttrsFn.applyArg(edge).applyArg(v);
+                edgeAttrsObj[v.getVal()] = val.getVal();
+            });
+            let from = edge.getValues()[0].getVal();
+            let to = edge.getValues()[1].getVal();
+            let edgeAttrsStr = Object.entries(edgeAttrsObj).map(([key, value]) => `${key}="${value}"`).join(",");
+            let edgeStr = `  ${from} -> ${to} [${edgeAttrsStr}];`;
+            graphvizStr += `${edgeStr}\n`;
+        }
+        graphvizStr += `}`;
+
+        // console.log("graphvizStr:", graphvizStr);
+
+        let ret = vizInstance.renderSVGElement(graphvizStr);
+        return m("g", [m.trust(ret.children[0].outerHTML)]);
+    }
+
     // console.log("name:", name);
     // console.log("attrs:", attrs);
     // console.log("children:", children);
@@ -1407,7 +1587,7 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
             
             let cols = [
                 m("td", {
-                    class: "th-state-varname",
+                    class: "th-state-varname trace-state-table-td",
                     // style: {"background-color": varnameCol},
                     onclick: (e) => {
                         // model.hiddenStateVars.push(varname);
@@ -1418,8 +1598,15 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
                     m("span", {class: "state-varname-text",style: {"background-color": varnameCol, "padding":"0px 0px 0px 0px"}}, varname),
                     // m("span", {class: "state-varname-text",style: {"background-color": varnameCol, "padding":"0px"}}, "  x")
                 ]),
-                m("td", {style: {}}, [tlaValView(varVal, prevVarVal)]),
-                m("td", { style: "width:15px", hidden: false }, 
+                m("td", {style: {
+                }, class: "trace-state-table-td"}, [tlaValView(varVal, prevVarVal)]),
+                m("td", { 
+                    style: {
+                        "border-right": "1px solid gray",
+                        "width": "20px",
+                    },
+                    hidden: false, class: "" 
+                }, 
                     m("img", {
                         style: {"width": "11px", "height": "11px"},
                         class: "hide-var-icon",
@@ -1432,7 +1619,7 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
                     })), // placeholder row.
             ]
 
-            return m("tr", { }, cols);
+            return m("tr", {class: "trace-state-table-row"}, cols);
         });
     }
 
@@ -1452,11 +1639,15 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
             // Button to delete trace expression.
             m("td", {
                 class: "trace-expr-delete",
+                style: {
+                    "text-align": "center",
+                    "vertical-align": "middle"
+                },
                 onclick: (e) => { 
                     _.remove(model.traceExprs, v => (v === expr));
                     updateRouteParams({traceExprs: model.traceExprs});
                 }
-            }, "✖"), // placeholder row.
+            }, trashIcon()), // placeholder row.
         ]
 
         // Demarcate trace expressions.
@@ -1478,7 +1669,7 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
             ctx.setGlobalDefTable(model.spec.globalDefTable);
             ctx.setSpecObj(model.spec);
             exprVal = evalExprStrInContext(ctx, model.traceExprInputText);
-            console.log("exprVal:", exprVal);
+            // console.log("exprVal:", exprVal);
         }
         catch (e) {
             // Ignore and suppress errors here since we assume bogus inputs may appear transiently.
@@ -1497,7 +1688,7 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
         traceExprRows = traceExprRows.concat([currTraceExprRow]);
     }
 
-    let stateColorBg = "#eee";
+    let stateColorBg = "transparent";
     let lassoToInd = (model.lassoTo !== null) ? _.findIndex(model.currTrace, s => s.fingerprint() === model.lassoTo) + 1 : ""
     let lassoNote = ((model.lassoTo !== null) && isLastState) ? " (Back to State " + lassoToInd + ")" : "";
     // let lastStateNote = isLastState ? "  (Current) " : "";
@@ -1518,9 +1709,9 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
         headerColSpanCount += explodedConstantVal.getElems().length;
     }
 
-    let headerRow = [m("tr", { style: `background-color: ${stateColorBg};border-bottom:solid 2px gray;`, class: "trace-state-header" }, [
-        m("th", { colspan: headerColSpanCount, }, [
-            m("span", { style: "color:black;padding-right:16px;border-right:solid 0px gray;font-size:14px;" }, stateIndLabel),
+    let headerRow = [m("tr", { style: `background-color: ${stateColorBg};border-bottom:solid 1px gray;`, class: "trace-state-header" }, [
+        m("th", { colspan: headerColSpanCount, style: "padding-top: 4px; padding-bottom: 8px;" }, [
+            m("span", { style: "color:black;padding-right:16px;border-right:solid 0px gray;font-size:14px;font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;font-weight: 600;" }, stateIndLabel),
             // m("span", { style: "color:black;padding-right:8px;border-right:solid 0px gray;font-size:14px;" }, stateIndLabel),
             m("span", { style: "color:black;padding-bottom:2px;font-family:monospace;font-size:12px;" }, stateHeaderText)
         ]),
@@ -1545,7 +1736,7 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
         });
 
         // console.log("Explode vars:", explodedVars);
-        varRows = m("tr", [
+        varRows = m("tr", {class: "trace-state-table-row"}, [
             // Unexploded vars.
             makeVarRows(varNamesToShow.filter(n => !explodedVars.includes(n))),
             // Exploded vars.
@@ -1573,7 +1764,7 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
     if (model.animationExists && model.enableAnimationView) {
         // traceStateElemChildren.push(vizSvg);
     }
-    let traceStateElem = m("div", { "class": "trace-state tlc-state" }, traceStateElemChildren);
+    let traceStateElem = m("div", { "class": "trace-state tlc-state", "data-testid": "trace-state-elem" }, traceStateElemChildren);
     return traceStateElem;
 }
 
@@ -1594,6 +1785,37 @@ function traceStateView(state) {
 }
 
 function componentTraceViewer(hidden) {
+    // Show loading state if trace is being loaded
+    if (model.traceLoadingInProgress) {
+        return m("div", { hidden: hidden }, [
+            m("div", { class: "pane-heading", id: "", style: "margin-top: 10px;" }, [
+                m("div", { class: "alert alert-info" }, [
+                    m("div", { class: "d-flex align-items-center" }, [
+                        m("div", { class: "spinner-border spinner-border-sm me-2" }),
+                        m("div", [
+                            "Loading trace... ",
+                            m("span", { class: "badge bg-secondary" }, 
+                                `State ${model.traceLoadingProgress.currentState} of ${model.traceLoadingProgress.totalStates}`
+                            )
+                        ])
+                    ])
+                ])
+            ])
+        ]);
+    }
+
+    // Show error state if trace loading failed
+    if (model.traceLoadingError) {
+        return m("div", { hidden: hidden }, [
+            m("div", { class: "pane-heading", id: "", style: "margin-top: 10px;"  }, [
+                m("div", { class: "alert alert-danger" }, [
+                    m("strong", "Error loading trace: "),
+                    model.traceLoadingError
+                ])
+            ])
+        ]);
+    }
+
     // let stateInd = 0;
     let traceElems = [];
     for (var ind = 0; ind < model.currTrace.length; ind++) {
@@ -1620,7 +1842,6 @@ function componentTraceViewer(hidden) {
                 role: "switch",
                 id: "animateSwitchCheck",
                 onclick: function (event) {
-                    // console.log("Toggle status: ", checked);
                     model.enableAnimationView = this.checked;
                 }
             }),
@@ -1630,19 +1851,89 @@ function componentTraceViewer(hidden) {
                 role: "switch"
             }, "Show animation")
         ]);
-        // children.push(animSwitch);
     }
 
-    return m("div", { hidden: hidden }, [
+    return m("div", { id: "trace-and-buttons-container",hidden: hidden }, [
         m("div", { class: "pane-heading", id: "trace-state-heading" }, children),
-        m("div", { id: "trace", hidden: model.tracePaneHidden }, traceElems)
+        m("div", { id: "trace", class:"trace-view-box", hidden: model.tracePaneHidden }, traceElems)
     ])
+}
 
+// Re-execute a trace based on a given list of state hashes.
+function loadTraceWebWorker(stateHashList){
+    // Clear any existing worker
+    if (model.traceLoadingWorker) {
+        model.traceLoadingWorker.terminate();
+    }
 
-    // return m("div", { id: "trace", hidden: model.tracePaneHidden || hidden }, [
+    // Initialize trace loading state
+    model.traceLoadingWorker = new Worker("js/worker.js");
+    model.traceLoadingInProgress = true;
+    model.traceLoadingProgress = { currentState: 0, totalStates: stateHashList.length };
+    model.traceLoadingError = null;
+    model.traceLoadingStart = performance.now();
 
-    //     traceElems
-    // ]);
+    // Set up message handler
+    model.traceLoadingWorker.onmessage = function(e) {
+        let response = e.data;
+        console.log("Message received from trace loading worker:", response);
+
+        if (response.type === "progress") {
+            model.traceLoadingProgress = {
+                currentState: response.currentState,
+                totalStates: response.totalStates
+            };
+            m.redraw();
+        }
+        else if (response.type === "error") {
+            model.traceLoadingError = response.error;
+            model.traceLoadingInProgress = false;
+            m.redraw();
+        }
+        else if (response.type === "complete") {
+
+            // Reset trace and load in the computed trace states.
+            resetTrace();
+
+            // Add each computed state into the current trace here.
+            for (let stateInfo of response.trace) {
+                console.log("stateInfo:", stateInfo);
+                let stateObj = stateInfo[0];
+
+                let stateDeserialized = TLAState.fromJSON(stateObj);
+                let quantBoundsDeserialized = _.mapValues(stateInfo[3], (v, k) => {
+                    return TLAValue.fromJSON(v);
+                });
+                console.log("quantBoundsDeserialized:", quantBoundsDeserialized);
+
+                model.currTrace.push({"state": stateDeserialized, "quant_bound": quantBoundsDeserialized});
+                model.currTraceActions.push([stateInfo[1], stateInfo[2], quantBoundsDeserialized]);
+            }
+
+            // console.log("model.currTrace:", model.currTrace);
+            // console.log("model.CURR TRACE ACTIONS:", model.currTraceActions);
+
+            // Re-compute the current set of next states.
+            let nextStates = recomputeNextStates(model.currTrace[model.currTrace.length - 1]["state"]);
+            model.currNextStates = _.cloneDeep(nextStates);
+    
+            updateTraceRouteParams();
+            
+            model.traceLoadingInProgress = false;
+            const duration = performance.now() - model.traceLoadingStart;
+            console.log(`Trace loading completed in ${duration.toFixed(1)}ms`);
+            m.redraw();
+        }
+    };
+
+    // Send initial message to worker
+    model.traceLoadingWorker.postMessage({
+        action: "loadTrace",
+        stateHashList: stateHashList,
+        newText: model.specText,
+        specPath: model.specPath,
+        constValInputs: model.specConstInputVals
+    });
 }
 
 // TODO: Think about more fully fledged worker execution framework.
@@ -1651,6 +1942,7 @@ function startCheckInvariantWebWorker(invariantExpr){
     model.invariantCheckerStart = performance.now()
     model.invariantCheckerRunning = true;
     invCheckerWebWorker.postMessage({
+        action: "checkInvariant",
         newText: model.specText,
         specPath: model.specPath,
         constValInputs: model.specConstInputVals,
@@ -1737,10 +2029,16 @@ function onSpecParse(newText, parsedSpecTree, spec){
      // Load constants if given.
      let constantParams = m.route.param("constants");
      if (constantParams) {
-         console.log("CONSTNS:", constantParams);
+         console.log("CONSTANT params:", constantParams);
          model.specConstInputVals = constantParams;
          let reload = false;
-         setConstantValues(reload);
+         try {
+             setConstantValues(reload);
+         } catch (e) {
+             console.error("Error setting constant values:", e);
+             model.errorObj = {parseError: true, obj: e, message: e};
+             return;
+         }
      }
 
     // console.log("constinputvals:", model.specConstInputVals);
@@ -1810,8 +2108,10 @@ async function handleCodeChange(editor, changes) {
     // parsedSpecTree = parseSpec(newText, model.specPath);
 
     let spec = new TLASpec(newText, model.specPath);
+    let parseStartTime = performance.now();
     return spec.parse().then(function(){
-        console.log("SPEC WAS PARSED.", spec);
+        let parseEndTime = performance.now();
+        console.log("SPEC WAS PARSED IN", (parseEndTime - parseStartTime).toFixed(1), "ms.", spec);
         onSpecParse(newText, spec.spec_obj, spec);
         m.redraw(); //explicitly re-draw on promise resolution.
     }).catch(function(e){
@@ -1826,7 +2126,17 @@ function resetTrace() {
     model.forwardHistoryActions = [];
     model.invariantViolated = false;
     model.invariantCheckingDuration = 0;
-    reloadSpec();
+
+    // Clear the current trace but don't reset all parameters or reload the entire spec.
+    model.currTrace = []
+    model.currTraceActions = []
+    model.currTraceAliasVals = []
+    model.lassoTo = null;
+    model.errorObj = null;
+
+    let nextStates = recomputeInitStates();
+    model.currNextStates = _.cloneDeep(nextStates);
+
     updateTraceRouteParams();
 }
 
@@ -1883,6 +2193,23 @@ function gearIcon(){
     ])
 }
 
+function trashIcon(){
+    return m("svg", {
+        xmlns: "http://www.w3.org/2000/svg",
+        style: {"width":"9px", "height":"9px"},
+        fill: "currentColor",
+        class: "bi bi-trash",
+        viewBox: "0 0 16 16"
+    }, [
+        m("path", {
+            d: "M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"
+        }),
+        m("path", {
+            d: "M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"
+        })
+    ])
+}
+
 function explodeButtonDropdown(){
     // Just limit to trace explosion on SetValues for now.
     let explodableConsts = Object.keys(model.specConstVals).filter(k => model.specConstVals[k] instanceof SetValue);
@@ -1933,7 +2260,7 @@ function componentButtonsContainer() {
             m("button", { 
                 class: "btn btn-sm btn-outline-primary button-bagse", 
                 id: "trace-back-button", 
-                disabled: model.currTrace.length === 0,
+                disabled: model.currTrace.length <= 1,
                 onclick: traceStepBack 
             }, "Back"),
             m("button", { 
@@ -1942,7 +2269,12 @@ function componentButtonsContainer() {
                 disabled: model.forwardHistory.length === 0,
                 onclick: traceStepForward 
             }, "Forward"),
-            m("button", { class: "btn btn-sm btn-outline-primary button-bagse", id: "trace-reset-button", onclick: resetTrace }, "Reset"),
+            m("button", { 
+                class: "btn btn-sm btn-outline-primary button-bagse", 
+                id: "trace-reset-button", 
+                "data-testid": "trace-reset-button",
+                onclick: resetTrace 
+            }, "Reset"),
             // Explode dropdown.
             explodeButtonDropdown(),
             m("button", { 
@@ -2046,16 +2378,19 @@ function stateSelectionPane(hidden){
 
     let fetchingInProgress = model.rootModName.length === 0 && !model.loadSpecFailed;
 
+    let stateChoicesDiv =
+        m("div", { id: "initial-states", class: "tlc-state" }, [
+            model.currTrace.length === 0 && model.nextStatePred !== null ? m("div", {style: "padding:10px;", id:"choose-initial-state-title"}, "Choose Initial State") : m("span"),
+            model.nextStatePred === null && !fetchingInProgress ? m("div", {style: "padding:20px;"}, "No transition relation found. Spec can be explored in the REPL.") : m("span"),
+            componentNextStateChoices()
+        ]);
+
     // return m("div", {id:"mid-pane", hidden: hidden}, 
     return m("div", {id: "state-choices-pane", hidden: hidden}, [
         // chooseConstantsPane(),
         fullNextStatesSwitch,
         // m("h5", { id: "poss-next-states-title", class: "" }, (model.currTrace.length > 0) ? "Choose Next Action" : "Choose Initial State"),
-        m("div", { id: "initial-states", class: "tlc-state" }, [
-            model.currTrace.length === 0 && model.nextStatePred !== null ? m("div", {style: "padding:10px;", id:"choose-initial-state-title"}, "Choose Initial State") : m("span"),
-            model.nextStatePred === null && !fetchingInProgress ? m("div", {style: "padding:20px;"}, "No transition relation found. Spec can be explored in the REPL.") : m("span"),
-            componentNextStateChoices()
-        ]),
+        model.traceLoadingInProgress ? m("div", {style: "padding:20px;color:gray;"}, "Waiting for trace to load...") : stateChoicesDiv,
     ]);    
 }
 
@@ -2119,6 +2454,7 @@ function loadSpecBox(hidden){
             m("button", {
                 id:"load-spec-urfl-button", 
                 class: "btn btn-sm btn-secondary",
+                "data-testid": "load-spec-button",
                 onclick: () => {
                     model.rootModName = "";
                     model.specPath = model.specUrlInputText;
@@ -2134,6 +2470,7 @@ function loadSpecBox(hidden){
                 text:"file upload", 
                 class:"form-control form-control-sm" + (model.loadSpecFailed ? " is-invalid" : ""),
                 placeholder: "URL to .tla file.",
+                "data-testid": "load-spec-url-input",
                 oninput: e => { model.specUrlInputText = e.target.value }
             }, "From URL upload:"),
         ]),
@@ -2366,7 +2703,7 @@ function animationPane(hidden) {
             ]);
         }
 
-        return m("div", { hidden: hidden }, [
+        return m("div", { id: "trace-and-buttons-container", hidden: hidden }, [
             componentButtonsContainer(),
             traceStateCounter(),
             m("div", { id: "anim-div" }, m("svg", { width: "100%", height: "100%", viewBox: "0 0 200 240" }, [viewSvgObj]))
@@ -2607,14 +2944,33 @@ function loadRouteParamsState() {
     let explodedConstantExprStr = m.route.param("explodedConstantExpr");
     if (explodedConstantExprStr) {
         model.explodedConstantExpr = explodedConstantExprStr;
-        // TODO: Should check if the loaded constant actual exists in current model.
-        // assert(model.specConstVals.hasOwnProperty(model.explodedConstantExpr));
     }
+
+    // Check for animation parameter and switch to animation tab if available
+    let animParam = m.route.param("anim");
+    if (animParam === true && model.animationExists) {
+        model.selectedTraceTab = TraceTab.Animation;
+        model.enableAnimationView = true;
+    }
+
+    // Feature flag to use web worker for trace loading.
+    const useWebWorkerLoad = true;
 
     // Load trace if given.
     let traceParamStr = m.route.param("trace")
     if (traceParamStr) {
-        traceParams = traceParamStr.split(",");
+        let traceParams = traceParamStr.split(",");
+
+        if(useWebWorkerLoad){
+            loadTraceWebWorker(traceParams);
+            return;
+        }
+
+        // 
+        // Older way of simply re-computing full trace directly in this thread.
+        // Keeping around in case we want to revert at any point.
+        // 
+
         for (const stateHash of traceParams) {
             // Check each state for possible quant bounds hash,
             // if it has one.
@@ -2645,6 +3001,7 @@ function loadSpecText(text, specPath) {
     model.invariantViolated = false;
     model.invariantCheckingDuration = 0;
     model.invariantCheckerRunning = false;
+    model.traceLoadingError = null;
 
     let parsedChanges = m.route.param("changes");
 
@@ -2870,12 +3227,10 @@ async function loadApp() {
 
     // Check for given spec in URL args.
     specPathArg = m.route.param("specpath");
-    console.log("specpatharg", specPathArg);
     // specPathArg = urlParams["specpath"];
 
     // Check for repl mode.
     replArg = m.route.param("repl");
-    console.log("replArg", replArg);
     model.replMode = replArg === true;
 
     // Load given spec.
@@ -2931,7 +3286,42 @@ async function init() {
     tree = null;
     parser.setLanguage(language);
 
+    // Load Graphviz library for visualizations.
+    Viz.instance().then(viz => {
+        vizInstance = viz;
+    });
+
     await loadApp()
+
+    // Add keyboard event listener for navigation
+    document.addEventListener('keydown', handleKeyboardNavigation);
+}
+
+function handleKeyboardNavigation(event) {
+    // Only handle if we're not in an input field or textarea
+    if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') {
+        return;
+    }
+
+    // Check for Ctrl/Cmd + Shift + L combination
+    // Switches current app path to local server (FOR DEBUGGING ONLY).
+    if ((event.ctrlKey) && event.shiftKey && event.key === 'L') {
+        console.log('Ctrl/Cmd + Shift + L pressed!');
+        let currBase = window.location.href.split("#!")[0];
+        let currTail = window.location.href.split("#!")[1];
+        console.log("currBase", currBase);
+        let newBase = 'http://127.0.0.1:8000';
+        let newLoc = newBase + "#!" + currTail;
+        console.log("newLoc", newLoc);
+        window.location.href = newLoc;
+        return;
+    }
+
+    if (event.key === 'ArrowLeft' && model.currTrace.length > 1) {
+        traceStepBack();
+    } else if (event.key === 'ArrowRight') {
+        traceStepForward();
+    }
 }
 
 //

@@ -126,6 +126,39 @@ class TLAValue {
     constructor() {
     }
 
+    toJSON() {
+        return "'toJSON' unimplemented";
+    }
+
+    // This is notably useful for deserializing values from JSON objects that
+    // are produced as a result of `structuredClone` calls on class instances
+    // (e.g. when passing objects back from a WebWorker).
+    static fromJSON(jsonval) {
+        if (jsonval.type === "IntValue") {
+            return IntValue.fromJSON(jsonval);
+        }
+        else if (jsonval.type === "StringValue") {
+            return StringValue.fromJSON(jsonval);
+        }
+        else if (jsonval.type === "BoolValue") {
+            return BoolValue.fromJSON(jsonval);
+        }
+        else if (jsonval.type === "FcnRcdValue") {
+            return FcnRcdValue.fromJSON(jsonval);
+        }
+        else if (jsonval.type === "SetValue") {
+            return SetValue.fromJSON(jsonval);
+        }
+        else if (jsonval.type === "TupleValue") {
+            return TupleValue.fromJSON(jsonval);
+        }
+        else if (jsonval.type === "ModelValue") {
+            return ModelValue.fromJSON(jsonval);
+        } else{
+            throw new Error("Unknown value type: " + jsonval.type);
+        }
+    }
+
     toJSONITF() {
         return "'toJSONITF' unimplemented";
     }
@@ -168,12 +201,16 @@ class IntValue extends TLAValue {
     constructor(n) {
         super(n);
         this.val = n;
+        this.type = "IntValue";
     }
     toString() {
         return this.val.toString();
     }
     toJSON() {
         return this.val;
+    }
+    static fromJSON(jsonval){
+        return new IntValue(jsonval.val);
     }
     toJSONITF() {
         return { "#type": "int", "#value": this.val };
@@ -205,6 +242,7 @@ class BoolValue extends TLAValue {
     constructor(n) {
         super(n);
         this.val = n;
+        this.type = "BoolValue";
     }
     toString() {
         return this.val ? "TRUE" : "FALSE";
@@ -212,6 +250,11 @@ class BoolValue extends TLAValue {
     toJSON() {
         return this.val;
     }
+
+    static fromJSON(jsonval){
+        return new BoolValue(jsonval.val);
+    }
+
     toJSONITF() {
         return { "#type": "bool", "#value": this.val };
     }
@@ -232,6 +275,7 @@ class ModelValue extends TLAValue {
     constructor(s) {
         super(s);
         this.val = s;
+        this.type = "ModelValue";
     }
     getVal() {
         return this.val;
@@ -242,6 +286,11 @@ class ModelValue extends TLAValue {
     toJSON() {
         return this.val;
     }
+
+    static fromJSON(jsonval){
+        return new ModelValue(jsonval.val);
+    }
+
     toJSONITF() {
         return { "#type": "modelVal", "#value": this.val };
     }
@@ -254,6 +303,7 @@ class StringValue extends TLAValue {
     constructor(s) {
         super(s);
         this.val = s;
+        this.type = "StringValue";
     }
     getVal() {
         return this.val;
@@ -263,6 +313,9 @@ class StringValue extends TLAValue {
     }
     toJSON() {
         return this.val;
+    }
+    static fromJSON(jsonval){
+        return new StringValue(jsonval.val);
     }
     toJSONITF() {
         return { "#type": "string", "#value": this.val };
@@ -277,6 +330,7 @@ class SetValue extends TLAValue {
         super(elems);
         // Remove duplicates at construction.
         this.elems = _.uniqBy(elems, (e) => e.fingerprint());
+        this.type = "SetValue";
     }
     toString() {
         return "{" + this.elems.map(x => x.toString()).join(",") + "}";
@@ -284,6 +338,10 @@ class SetValue extends TLAValue {
 
     toJSON() {
         return this.elems;
+    }
+    
+    static fromJSON(jsonval){
+        return new SetValue(jsonval.elems.map(e => TLAValue.fromJSON(e)));
     }
 
     toJSONITF() {
@@ -333,6 +391,7 @@ class TupleValue extends TLAValue {
     constructor(elems) {
         super(elems);
         this.elems = elems;
+        this.type = "TupleValue";
     }
     toString() {
         return "<<" + this.elems.map(x => x.toString()).join(",") + ">>";
@@ -350,6 +409,10 @@ class TupleValue extends TLAValue {
 
     toJSON() {
         return this.elems;
+    }
+
+    static fromJSON(jsonval){
+        return new TupleValue(jsonval.elems.map(e => TLAValue.fromJSON(e)));
     }
 
     append(el) {
@@ -410,6 +473,7 @@ class FcnRcdValue extends TLAValue {
         this.values = values
         // Trace 'record' types explicitly.
         this.isRecord = isRecord || false;
+        this.type = "FcnRcdValue";
     }
     toString() {
         if (this.isRecord) {
@@ -421,6 +485,13 @@ class FcnRcdValue extends TLAValue {
 
     toJSON() {
         return _.fromPairs(_.zip(this.domain, this.values))
+    }
+
+    static fromJSON(jsonval){
+        return new FcnRcdValue(
+                    jsonval.domain.map(e => TLAValue.fromJSON(e)), 
+                    jsonval.values.map(e => TLAValue.fromJSON(e)), 
+                    jsonval.isRecord);
     }
 
     getDomain() {
@@ -645,6 +716,10 @@ class TLAState {
         return this.stateVars.hasOwnProperty(varname);
     }
 
+    static fromJSON(jsonval) {
+        return new TLAState(_.mapValues(jsonval.stateVars, (v, k) => TLAValue.fromJSON(v)));
+    }
+
     /**
      * Return the assigned value for the given variable name in this state.
      */
@@ -805,7 +880,7 @@ class SyntaxRewriter {
             rewriteBatch = this.genSyntaxRewrites(specTree);
         }
         const duration = (performance.now() - start).toFixed(1);
-        evalLog(`Completed spec rewriting in ${duration}ms`)
+        console.log(`Completed spec rewriting in ${duration}ms`)
         // console.log(specTextRewritten);
         return specTextRewritten;
     }
@@ -857,6 +932,22 @@ class SyntaxRewriter {
     // Apply a given set of text rewrites to a given source text. Assumes the given
     // 'text' argument is a string given as a list of lines.
     applySyntaxRewrites(text, rewrites) {
+        // console.log("num rewrites:", rewrites.length);
+
+        // Sort rewrites from bottom to top, with later rows coming first. This
+        // allows us to apply batches of rewrites without worrying about earlier
+        // rewrites in the document affecting positions of later ones. 
+        rewrites.sort((a, b) => {
+            let aRow = a["startPosition"]["row"];
+            let bRow = b["startPosition"]["row"];
+            if (aRow === bRow) {
+                // If same row, sort by column descending
+                return b["startPosition"]["column"] - a["startPosition"]["column"];
+            }
+            // Sort by row descending
+            return bRow - aRow;
+        });
+
         let lines = text.split("\n");
         // let sourceMapFn = (line, col) => (line, col);
 
@@ -1055,7 +1146,7 @@ class SyntaxRewriter {
                             endPosition: node.endPosition,
                             newStr: ""
                         });
-                        return sourceRewrites;
+                        // return sourceRewrites;
                     }
 
                     // Comments.
@@ -1068,7 +1159,7 @@ class SyntaxRewriter {
                             // deleteRow: node.startPosition["row"]
                         }
                         sourceRewrites.push(rewrite);
-                        return sourceRewrites;
+                        // return sourceRewrites;
                     }
 
                     // Bound infix ops.
@@ -1102,7 +1193,7 @@ class SyntaxRewriter {
                                 newStr: outStr
                             }
                             sourceRewrites.push(rewrite);
-                            return sourceRewrites;
+                            // return sourceRewrites;
                         }
 
                     }
@@ -1188,7 +1279,7 @@ class SyntaxRewriter {
                                 newStr: outStr
                             }
                             sourceRewrites.push(rewrite);
-                            return sourceRewrites;
+                            // return sourceRewrites;
                         }
 
                     }
@@ -1544,7 +1635,6 @@ class TLASpec {
      * Extract set of actions from a syntax node.
      */
     parseActionsFromNode(node, ind){
-        console.log("parseActionsFromNode:", node);
         if(ind === undefined){
             ind = 0;
         }
@@ -1568,11 +1658,10 @@ class TLASpec {
             let lhs = node.children[0];
             let symbol = node.children[1];
             let rhs = node.children[2];
-            console.log("infix:", lhs, symbol, rhs);
+            evalLog("infix:", lhs, symbol, rhs);
             
             // Disjunction A \/ B.
             if(symbol.type === "lor"){
-                console.log("PARSING LOR ACTION");
                 return this.parseActionsFromNode(lhs).concat(this.parseActionsFromNode(rhs));
             }
         }
@@ -1895,7 +1984,7 @@ class TLASpec {
             }
 
             if(node.type === "recursive_declaration"){
-                console.log("RECURSIVE DECLARATION:", node);
+                // console.log("RECURSIVE DECLARATION:", node);
 
                 cursor.gotoFirstChild();
 
@@ -1920,9 +2009,9 @@ class TLASpec {
                 console.log("NODE:", node);
 
                 let opName = node.namedChildren[0].text;
-                console.log("OP NAME:", opName);
+                // console.log("OP NAME:", opName);
                 let placeholders = node.namedChildren.filter(n => n.type === "placeholder");
-                console.log("PLACEHOLDERS:", placeholders);
+                // console.log("PLACEHOLDERS:", placeholders);
 
                 let parentModuleName = root_mod_name;
                 let defUniqueId = self.nextGlobalDefId();
@@ -1953,7 +2042,6 @@ class TLASpec {
                 // self.globalDefTable[opName] = op_defs[defUniqueId];
                 self.globalDefTable[defUniqueId] = op_defs[defUniqueId];
                 // self.globalDefTableObj.addDefinition(opName, defObject);
-                console.log("added recursive decl:", opName);
 
                 cursor.gotoParent();
                 if(isLocalDef){
@@ -2025,7 +2113,6 @@ class TLASpec {
                 // record a pointer to us.
                 let prevRecOp = _.find(op_defs, o => o.name === opName && o.recursive_declaration);
                 if(prevRecOp !== undefined){
-                    console.log("found prev rec op:", prevRecOp);
                     op_defs[prevRecOp.id]["recursive_definition_id"] = defUniqueId;
                 }
 
@@ -2167,8 +2254,8 @@ class TLASpec {
             //
 
             // TODO: Do recursively.    
-            console.log("NEXTNODE:", nextNode);
-            console.log("NEXT_CHILDR:", nextNode.namedChildren);
+            // console.log("NEXTNODE:", nextNode);
+            // console.log("NEXT_CHILDR:", nextNode.namedChildren);
 
             actions = self.parseActionsFromNode(nextNode);
             console.log("parsed actions:", actions);
@@ -3713,8 +3800,15 @@ function evalBoundedQuantification(node, ctx) {
     let quantBoundNodes = node.namedChildren.filter(c => c.type === "quantifier_bound");
     // Only a single quantifier bound.
     assert(quantBoundNodes.length === 1);
-    // Only single identifier within this quantifier bound.
-    assert(quantBoundNodes[0].namedChildren.filter(c => c.type === "identifier").length === 1);
+
+    // First element can also be tuple_of_identifiers.
+    let tupOfIdents = null;
+    if (quantBoundNodes[0].namedChildren[0].type === "tuple_of_identifiers") {
+        tupOfIdents = quantBoundNodes[0].namedChildren[0];
+        evalLog("tupOfIdents:", tupOfIdents);
+    } else{
+        assert(quantBoundNodes[0].namedChildren.filter(c => c.type === "identifier").length === 1);
+    }
 
     let quantifier = node.namedChildren[0];
     assert(quantifier.type === "exists" || quantifier.type === "forall");
@@ -3740,9 +3834,15 @@ function evalBoundedQuantification(node, ctx) {
     let domainVal = evalExpr(quantBound.lastNamedChild, ctx)[0]["val"];
     assert(domainVal instanceof SetValue);
     let quantDomain = domainVal.getElems();
-
-    let quantIdent = quantBound.namedChildren.filter(c => c.type === "identifier")[0].text;
     evalLog("quantDomain: ", quantDomain);
+    // If we have a tuple of identifiers, then each element in the domain should be a tuple.
+
+    let quantIdent;
+    if(tupOfIdents == null){
+        quantIdent = quantBound.namedChildren.filter(c => c.type === "identifier")[0].text;
+    } else{
+        quantIdent = tupOfIdents.namedChildren.filter(c => c.type === "identifier").map(c => c.text);
+    }
     evalLog("quantIdent: ", quantIdent);
 
     // Iterate over the product of all quantified domains and evaluate
@@ -3765,7 +3865,16 @@ function evalBoundedQuantification(node, ctx) {
         if (!boundContext.hasOwnProperty("quant_bound")) {
             boundContext["quant_bound"] = {};
         }
-        boundContext["quant_bound"][quantIdent] = domVal;
+
+        if(tupOfIdents == null){
+            boundContext["quant_bound"][quantIdent] = domVal;
+        } else{
+            // Handle identifier tuple.
+            for(var ind = 0; ind < quantIdent.length; ind++){
+                boundContext["quant_bound"][quantIdent[ind]] = domVal.getValues()[ind];
+            }
+        }
+
         evalLog("quantDomain val:", domVal);
         evalLog("boundContext:", boundContext);
         let ret = evalExpr(quant_expr, boundContext.clone());
@@ -3779,7 +3888,13 @@ function evalBoundedQuantification(node, ctx) {
         let allVals = retCtxs.map(c => c["val"].getVal());
         evalLog("allVals:", allVals);
         let res = _.every(retCtxs.map(c => c["val"].getVal()));
-        return [ctx.withVal(new BoolValue(res))];
+
+        // For universal quantifiers, it is also valid for them to modify the
+        // value of state variables inside their quantified expressions e.g. \A
+        // s \in {3,4} : x' = 2. To address this, we return the latest context
+        // produced as a result of evaluating the quantified expression (i.e. as
+        // if it were the last conjunct in a conjunction).
+        return [_.last(retCtxs).withVal(new BoolValue(res))];
     }
 
     assert(quantifier.type === "exists");
@@ -3848,6 +3963,8 @@ function evalUserBoundOp(node, opDefObj, ctx){
         evalLog("opEvalContext with var_decls_context:", opEvalContext);
     }
 
+    let origQuantBounds = _.clone(opEvalContext["quant_bound"]);
+
     evalLog("opDefNode", opDefNode);
     for (var i = 0; i < opArgs.length; i++) {
         // The parameter name in the operator definition.
@@ -3913,7 +4030,6 @@ function evalUserBoundOp(node, opDefObj, ctx){
         opEvalContext["defns_curr_context"] = opEvalContext["defns_curr_context"].concat(opDefObj["defns_curr_context"]);
     }
 
-    evalLog("opEvalContext:", opEvalContext);
     ret = evalExpr(opDefNode, opEvalContext);
 
     // Don't retain these var decl context values in the context upon return. We
@@ -3922,6 +4038,9 @@ function evalUserBoundOp(node, opDefObj, ctx){
     // propagate through to other evaluation contexts upon return.
     ret.map(c => c.var_decls_context = undefined);
     ret.map(c => c.defns_curr_context = origCurrDefns);
+    ret.map(c => c.quant_bound = origQuantBounds);
+
+    // console.log("orig quant bounds:", origQuantBounds, opEvalContext["quant_bound"]);
     
     return ret;
 }

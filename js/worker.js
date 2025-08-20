@@ -11,9 +11,150 @@ let parser;
 let languageName = "tlaplus";
 let enableEvalTracing = false;
 
+// Compute a hash of a quantifier bounds objects, which should be simply a
+// mapping from identifier strings to TLA values.
+function hashQuantBounds(quantBounds){
+    let keysSorted = _.keys(quantBounds).sort();
+    let kvPairs = keysSorted.map(k => [k, quantBounds[k].fingerprint()]);
+    return hashSum(kvPairs);
+}
+
+function actionIdForNextState(currNextStates, nextStateHash) {
+    // Find the action id that corresponds to the selected next state.
+    console.log("currNextStates:", currNextStates);
+    // console.log("nextStateHash:", _.find(currNextStates, (s) => s["state"].fingerprint() === nextStateHash));
+    let actionId = _.findKey(currNextStates, (states) => _.find(states, (s) => s["state"].fingerprint() === nextStateHash));
+    console.log("actionId:", actionId);
+    return actionId;
+}
+
+function recomputeNextStates(model,fromState) {
+    let interp = new TlaInterpreter();
+    let nextStates;
+
+    evalNodeGraphsPerAction = {};
+
+    // Compute next states broken down by action.
+    // TODO: Consider if this functionality more appropriately lives inside the interpreter logic.
+    if (model.actions.length > 1) {
+        let nextStatesByAction = {}
+        for (const action of model.actions) {
+            assert(action instanceof TLAAction);
+            // console.log("FROM:", fromState)
+            const start = performance.now();
+            cloneTime = 0;
+            numClones = 0;
+
+            console.log("fromState:", fromState);
+            console.log("actions:", model.actions);
+            console.log("actions:", model.specTreeObjs);
+            let nextStatesForAction = interp.computeNextStates(model.specTreeObjs, model.specConstVals, [fromState], action.node, model.spec)
+            console.log("nextStatesForAction", nextStatesForAction); 
+
+            nextStatesForAction = nextStatesForAction.map(c => {
+                let deprimed = c["state"].deprimeVars();
+                return { "state": deprimed, "quant_bound": c["quant_bound"] };
+            });
+            // nextStatesForActionQuantBound = nextStatesForActionQuantBound.map(c => c["quant_bound"]);
+            nextStatesByAction[action.id] = nextStatesForAction;
+
+            evalNodeGraphsPerAction[action.id] = evalNodeGraph;
+
+            const duration = (performance.now() - start).toFixed(1);
+
+            console.log(`Generating next states for action '${action.name}' took ${duration}ms, (${nextStatesForAction.length} distinct states generated, clone time: ${cloneTime.toFixed(2)}ms, ${numClones} clones)`)
+            cloneTime = 0;
+            numClones = 0;
+        }
+        nextStates = nextStatesByAction;
+    } else {
+        nextStates = interp.computeNextStates(model.specTreeObjs, model.specConstVals, [fromState], undefined, model.spec)
+            .map(c => {
+                let deprimed = c["state"].deprimeVars();
+                return { "state": deprimed, "quant_bound": c["quant_bound"] };
+            });
+    }
+
+    return nextStates;
+}
+
+
+function chooseNextState(model, statehash_short, quantBoundsHash, rethrow = false) {
+    // Clear forward history since we're taking a new path
+    // model.forwardHistory = [];
+    // model.forwardHistoryActions = [];
+    
+    // console.log("currNextStates:", JSON.stringify(currNextStates));
+    // console.log("chooseNextState: ", statehash_short);
+
+    let currNextStatesSet = _.flatten(_.values(model.currNextStates));
+    console.log("currNextStatesSet:", currNextStatesSet);
+    let nextStateChoices = currNextStatesSet.filter(s => {
+        if (quantBoundsHash === undefined || _.isEmpty(quantBoundsHash)) {
+            console.log("s:", s["state"]);
+            return s["state"].fingerprint() === statehash_short;
+        } else {
+            // If quant bounds are given, then choose next state that both
+            // matches state hash and also matches the quant bounds hash. This
+            // can matter when, for example, two distinct actions (e.g. those
+            // with different parameters) lead to the same state.
+            let sameQuantParams = _.isEqual(hashQuantBounds(s["quant_bound"]), quantBoundsHash);
+            return s["state"].fingerprint() === statehash_short && sameQuantParams;
+        }
+    });
+
+    let nextStateActionId = null;
+    if (model.actions.length > 1 && model.currTrace.length >= 1) {
+        nextStateActionId = actionIdForNextState(model.currNextStates, statehash_short)
+        // console.log("actionid:", nextStateActionId);
+    }
+
+    if (nextStateChoices.length === 0) {
+        throw Error("Given state hash " + statehash_short + " does not exist among possible next states.")
+    }
+    let nextState = nextStateChoices[0];
+
+    // Append next state to the trace and update current route.
+    model.currTrace.push([nextState.state, nextStateActionId, quantBoundsHash, nextState["quant_bound"]] );
+
+    // Recrod the quant bounds used in the action as well in case we need to tell between two different actions
+    // with the same type but different params that lead to the same state.
+    
+    model.currTraceActions.push([nextStateActionId, quantBoundsHash]);
+    // updateTraceRouteParams();
+
+    const start = performance.now();
+
+    try {
+        console.log("recomputing next states for", nextState["state"]);
+        let nextStates = recomputeNextStates(model, nextState["state"]);
+        const duration = (performance.now() - start).toFixed(1);
+
+        const start2 = performance.now();
+        model.currNextStates = _.cloneDeep(nextStates);
+        const duration2 = (performance.now() - start2).toFixed(1);
+
+        console.log(`Generating next states took ${duration}ms (cloning took ${duration2}ms )`)
+    } catch (e) {
+        console.error("Error computing next states.", e);
+        if (currEvalNode !== null) {
+            // Display line where evaluation error occurred.
+            // showEvalError(currEvalNode, e);
+        }
+        if(rethrow){
+            throw e;
+        }
+        return;
+    }
+
+    return nextState;
+}
+
+
 onmessage = async (e) => {
 
 
+    let action = e.data.action;
     let newText = e.data.newText;
     let specPath = e.data.specPath;
     let constValInputs = e.data.constValInputs;
@@ -52,7 +193,14 @@ onmessage = async (e) => {
 
         let constVals = {};
         let constTlaVals = {};
-    
+        let model = {};
+
+        model.spec = spec;
+        model.specText = newText;
+        model.specTreeObjs = spec.spec_obj;
+        model.errorObj = null;
+        model.actions = spec.spec_obj.actions;
+
         // Evaluate each CONSTANT value expression.
         for (var constDecl in constValInputs) {
             let constValText = constValInputs[constDecl];
@@ -62,7 +210,6 @@ onmessage = async (e) => {
             // console.log("constDecl:", constDecl, constValText);
             constVals[constDecl] = constValText;
 
-            let model = {};
             model.specDefs = spec.spec_obj["op_defs"]
     
             let ctx = new Context(null, new TLAState({}), model.specDefs, {}, constTlaVals);
@@ -74,6 +221,87 @@ onmessage = async (e) => {
         }
     
         // console.log("constTlaVals:", constTlaVals);
+        model.specConstVals = constTlaVals;
+        model.currTrace = [];
+        model.currTraceActions = [];
+        model.currNextStates = [];
+
+        // Re-execute a trace from a list of given state hashes.
+        if(action === "loadTrace"){
+            let hashTrace = e.data.stateHashList;
+
+            try {
+                // Generate initial states.
+                let interp = new TlaInterpreter();
+
+                let initStates = interp.computeInitStates(spec.spec_obj, constTlaVals, true, spec);
+                console.log("initStates:", initStates);
+                model.currNextStates = initStates;
+
+                let trace = [];
+                let totalSteps = hashTrace.length;
+
+                for (let i = 0; i < hashTrace.length; i++) {
+                    let stateHash = hashTrace[i];
+                    console.log("stateHash:", stateHash);
+                    
+                    // Check each state for possible quant bounds hash
+                    let stateAndQuantBounds = stateHash.split("_");
+                    let rethrow = true;
+                    let stateInfo = {
+                        hash: stateHash
+                    };
+
+                    let nextState = null;
+
+                    try {
+                        if (stateAndQuantBounds.length > 1) {
+                            let justStateHash = stateAndQuantBounds[0];
+                            let quantBoundHash = stateAndQuantBounds[1];
+                            nextState = chooseNextState(model, justStateHash, quantBoundHash, rethrow);
+                            stateInfo.hash = justStateHash;
+                            stateInfo.quantBoundsHash = quantBoundHash;
+                        } else {
+                            nextState = chooseNextState(model, stateHash, undefined, rethrow);
+                        }
+                        stateInfo.state = nextState.state;
+                        stateInfo.actionId = nextState["actionId"];
+                        trace.push(stateInfo);
+                    } catch (err) {
+                        postMessage({
+                            type: "error",
+                            error: `Error loading state ${i + 1}/${totalSteps}: ${err.message}`
+                        });
+                        return;
+                    }
+
+                    // Send progress update
+                    postMessage({
+                        type: "progress",
+                        currentState: i + 1,
+                        totalStates: totalSteps
+                    });
+                }
+
+                console.log("model.currTrace:", model.currTrace);
+
+                // Send completion message with trace info
+                postMessage({
+                    type: "complete",
+                    trace: model.currTrace,
+                    currTraceActions: model.currTraceActions
+                });
+
+            } catch (err) {
+                console.error("Error initializing trace loading:", err);
+                postMessage({
+                    type: "error", 
+                    error: `Error initializing trace loading: ${err.message}`
+                });
+            }
+
+            return;
+        }
 
 
         // Generate initial states.

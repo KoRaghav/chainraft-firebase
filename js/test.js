@@ -333,6 +333,7 @@ async function testStateGraphEquiv(testId, stateGraph, parsedSpec, specPath, con
             { "spec": "simple_domain", "constvals": undefined },
             { "spec": "simple_implies", "constvals": undefined },
             { "spec": "simple_definition", "constvals": undefined },
+            { "spec": "simple_definition2", "constvals": undefined },
             { "spec": "simple6", "constvals": undefined },
             { "spec": "simple7", "constvals": undefined },
             { "spec": "simple8", "constvals": undefined },
@@ -354,7 +355,7 @@ async function testStateGraphEquiv(testId, stateGraph, parsedSpec, specPath, con
             { "spec": "simple_quant_multi", "constvals": undefined },
             { "spec": "simple_defined_var_assignment", "constvals": undefined },
             { "spec": "simple_defined_var_assignment_transitive", "constvals": undefined },
-            // { "spec": "simple_quant_tuple", "constvals": undefined },
+            { "spec": "simple_quant_tuple", "constvals": undefined },
             { "spec": "simple_multiline", "constvals": undefined },
             { "spec": "simple_letin", "constvals": undefined },
             { "spec": "simple_letin_fn_def", "constvals": undefined },
@@ -413,6 +414,7 @@ async function testStateGraphEquiv(testId, stateGraph, parsedSpec, specPath, con
         { "spec": "simple_unchanged_nested_tuple_def", "constvals": undefined },
         { "spec": "simple_unchanged_nested_tuple", "constvals": undefined },
         { "spec": "simple_unchanged", "constvals": undefined },
+        { "spec": "simple_unchanged_with_quant", "constvals": undefined },
         { "spec": "lockserver_nodefs_unchanged", "constvals": undefined },
     ],
     "Module instantiation": [
@@ -497,6 +499,16 @@ async function testStateGraphEquiv(testId, stateGraph, parsedSpec, specPath, con
             }
         },
         {
+            "spec": "AbstractRaft_BecomeLeader",
+            "constvals": {
+                "Server": new SetValue([new StringValue("n1"), new StringValue("n2"), new StringValue("n3")]),
+                "Secondary": new StringValue("Secondary"),
+                "Primary": new StringValue("Primary"),
+                "Nil": new StringValue("Nil"),
+                "InitTerm": new IntValue(0),
+            }
+        },
+        {
             "spec": "RaftWithReconfigBroken_Bounded", 
             "constvals": {
                 "Server": new SetValue([new StringValue("s1"), new StringValue("s2"), new StringValue("s3")]), 
@@ -530,6 +542,10 @@ async function testStateGraphEquiv(testId, stateGraph, parsedSpec, specPath, con
                 )
             }        
         },
+        { "spec": "Microwave", "constvals": {
+            "ImplementStartSafety": new BoolValue(false),
+            "ImplementOpenDoorSafety": new BoolValue(false),
+        } },
         // { "spec": "Consistency", "constvals": undefined },
     ]
     }
