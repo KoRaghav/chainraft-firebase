@@ -47,8 +47,8 @@ RecvAcceptP(s) ==
           /\ IF IsSelfRemv(s, m.val)
         \*   /\ IF FALSE
              THEN UNCHANGED <<h,p>>
-             ELSE IF /\ IsQuorum(m.nAcpt + 1, Cardinality(DOMAIN chain[s]))
-                     /\ ~IsQuorum(m.nAcpt, Cardinality(DOMAIN chain[s]))
+             ELSE IF /\ IsQuorum(m.nAcpt + 1, Len(chain[s]))
+                     /\ ~IsQuorum(m.nAcpt, Len(chain[s]))
                      \* Have to pass updated chain for AddNode
              THEN \E bool \in BOOLEAN :
                     LET r == UNION { {id \in UNION {readQueue[srv][i] : i \in {k \in DOMAIN readQueue[srv] : k <= m.ni}} :
@@ -72,19 +72,29 @@ RecvAcceptP(s) ==
                         /\ IF bool THEN p' = Append(p, m.ni) ELSE UNCHANGED p
              ELSE /\ h' = h \o DecidedReads(s, m.mAck)
                   /\ UNCHANGED p
+            \*  ELSE UNCHANGED <<h,p>>
     
     /\ RecvAccept(s)
     
 CPNextP ==
+    \* Client actions
     \/ \E v \in Val : ClientSendWrite(v) /\ UNCHANGED <<h, p>>
     \/ ClientSendRead /\ UNCHANGED <<h, p>>
+    \/ \E m \in msgs : ClientRecvWrite(m) /\ UNCHANGED <<h, p>>
+    \/ \E m \in msgs : ClientRecvRead(m) /\ UNCHANGED <<h, p>>
+
+    \* Server actions
+    \* \/ \E s \in Server : LeaderSendNoOPP(s) /\ UNCHANGED <<h, p>>
     \/ \E s \in Server : LeaderRecvAcceptAckP(s)
     \/ \E s \in Server : RecvAcceptP(s)
     \/ \E s \in Server : \E m \in msgs : LeaderRecvWriteP(s, m)
     \/ \E s \in Server : \E m \in msgs : RecvRead(s, m) /\ UNCHANGED <<h, p>>
-    \/ \E m \in msgs : ClientRecvWrite(m) /\ UNCHANGED <<h, p>>
-    \/ \E m \in msgs : ClientRecvRead(m) /\ UNCHANGED <<h, p>>
+
+    \* FT actions
     \/ \E s \in Server : SuspectNextNode(s) /\ UNCHANGED <<h, p>>
+    \/ \E s \in Server : AddNewNode(s) /\ UNCHANGED <<h, p>>
+    \/ \E s \in Server : \E m \in msgs : RecvStateTransfer(s, m) /\ UNCHANGED <<h, p>>
+    \* \/ \E s \in Server : Restart(s) /\ UNCHANGED <<h,p>>
 
 CPvarsP == <<CPvars, h, p>>
         

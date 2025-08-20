@@ -83,6 +83,7 @@ msgsReq(m) == IF m.type = "WriteRequest" THEN "WReq"
                 ELSE IF m.type = "ReadRequest" THEN "RReq"
                 ELSE IF m.type = "RemoveNode" THEN "Remove"
                 ELSE IF m.type = "AddNode" THEN "Add"
+                ELSE IF m.type = "StateTransfer" THEN "State"
                 ELSE "RRes"
 
 msgsVal(m) == IF m.type = "WriteRequest" \/ m.type = "ReadResponse"
@@ -90,6 +91,7 @@ msgsVal(m) == IF m.type = "WriteRequest" \/ m.type = "ReadResponse"
                      ELSE ToString(m.id) \o " | " \o ToString(m.val)
                 ELSE IF m.type = "ReadRequest" THEN ToString(m.id) \o " | " \o "?"
                 ELSE IF m.type = "RemoveNode" \/ m.type = "AddNode" THEN ToString(m.srv)
+                ELSE IF m.type = "StateTransfer" THEN ToString(m.dest)
                 ELSE ToString(m.id)
 
 msgsFill(m) == IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
@@ -103,7 +105,8 @@ msgsText(m) == IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
 msgsStroke(m) ==  IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
                     THEN "orange"
                     ELSE IF m.type = "RemoveNode" THEN "red"
-                    ELSE IF m.type = "AddNode" THEN "skyblue"
+                    ELSE IF m.type = "AddNode" THEN "dodgerblue"
+                    ELSE IF m.type = "StateTransfer" THEN "black"
                     ELSE "green"
 
 msgsReqEntry(xbase, ybase, m) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> msgsFill(m) @@ "stroke" :> msgsStroke(m))), 
@@ -189,11 +192,11 @@ bufReq(id,ind) == IF buf[id][ind].type = "Accept" THEN
                   ELSE "AcAck"
 
 bufVal(id,ind) == IF buf[id][ind].type = "Accept"
-               THEN ToString(buf[id][ind].mAck) \o " | " \o ToString(buf[id][ind].nAcpt) 
-               ELSE ToString(buf[id][ind].ni)
+                  THEN ToString(buf[id][ind].mAck) \o " | " \o ToString(buf[id][ind].nAcpt) 
+                  ELSE ToString(buf[id][ind].ni)
 
 bufReqEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
-                                   Text(xbase + 15, ybase + 8, bufReq(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "7px")>>, [l \in {} |-> {}])
+                                    Text(xbase + 15, ybase + 8, bufReq(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "7px")>>, [l \in {} |-> {}])
 bufValEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 1, ybase + 10, 28, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
                                    Text(xbase + 15, ybase + 18, bufVal(id,ind), ("text-anchor" :>  "middle") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 
@@ -205,15 +208,23 @@ bufElems ==  [i \in Server |-> bufElem(i, XBase, YBase + (i-1) * Spacing + 12)]
 \* Log Elements
 
 logEntryFill(id,ind) == IF ind <= maxAck[id] THEN "lightgreen"
-                          ELSE IF log[id][ind].decided THEN "orange"
-                          ELSE "lightgray"
-                          
-logEntry(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, [fill |-> logEntryFill(id,ind), stroke |-> IF log[id][ind].val \in RemoveNode THEN "red" ELSE "black"]), 
-                                   Text(xbase + 33, ybase + 8, IF log[id][ind].val \in RemoveNode THEN ToString(log[id][ind].val.srv) ELSE ToString(log[id][ind].val), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
-\* logElem(id, xbase, ybase) == Group([ind \in DOMAIN log[id] |-> logEntry(id, xbase + 12 * (ind-1), ybase, ind)], [l \in {} |-> {}])
+                        ELSE IF log[id][ind].decided THEN "orange"
+                        ELSE "lightgray"
+
+logEntryStroke(id,ind) == IF log[id][ind].val \in RemoveNode THEN "red"
+                          ELSE IF log[id][ind].val \in AddNode THEN "dodgerblue"
+                          ELSE "black"
+
+logEntryText(id,ind) == IF IsRemNode(log[id][ind].val) \/ IsAddNode(log[id][ind].val)
+                        THEN ToString(log[id][ind].val.srv)
+                        ELSE ToString(log[id][ind].val)
+
+logEntry2(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, [fill |-> logEntryFill(id,ind), stroke |-> logEntryStroke(id,ind)]), 
+                                   Text(xbase + 33, ybase + 8, logEntryText(id, ind), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
+
 logElem(id, xbase, ybase) ==
-  LET indSeq == SetToSeq(DOMAIN log[id]) IN
-  Group( [k \in DOMAIN indSeq |-> logEntry(id, xbase + 12*(indSeq[k]-1), ybase, indSeq[k])], [l \in {} |-> {}])
+  LET indSeq == SetToSeqAsc(DOMAIN log[id]) IN
+  Group([k \in DOMAIN indSeq |-> logEntry2(id, xbase + 12*(indSeq[k]-1), ybase, indSeq[k])], [l \in {} |-> {}])
 
 logElems ==  [i \in Server |-> logElem(i, XBase, YBase + (i-1) * Spacing + 12)]
 
@@ -227,28 +238,34 @@ mAcks == [i \in Server |-> mAckElem(i, XBase, YBase + (i-1) * Spacing + 27)]
 ----------------------------------------
 \* Server Elements
 
-TextFill(i) == IF i \in marked[i] THEN "white"
-               ELSE IF csleader[i] = i THEN "black" 
+IsRemoved(i) == \E j \in DOMAIN log[i] : /\ IsRemNode(log[i][j].val) 
+                                         /\ log[i][j] = i
+
+IsAdded(i) == \E j \in DOMAIN chain[i] : chain[i][j] = i
+
+TextFill(i) == IF IsRemoved(i) THEN "white"
+               ELSE IF ~IsAdded(i) \/ csleader[i] = i THEN "black" 
                ELSE "lightgray"
 
-IfRemoved(i) == \/ i \in marked[i]
-                \/ i \notin { chain[i][t] : t \in DOMAIN chain[i] }
+ServerFill(i) == IF IsRemoved(i) THEN "red"
+                 ELSE IF csleader[i] = i THEN "gold" 
+                 ELSE IF ~IsAdded(i) THEN "gainsboro"
+                 ELSE "gray"
 
 cs == [i \in Server |-> 
         LET id == ToString(i) IN
         Group(<<
             Circle(XBase + 15, YBase + (i-1) * Spacing + 17, 9, 
-            [stroke |-> "black", fill |->
-                IF IfRemoved(i) THEN "red"
-                ELSE IF csleader[i] = i THEN "gold" 
-                ELSE "gray"]),
-            Text(XBase + 15, YBase + (i-1) * Spacing + 20, id, ("fill" :> TextFill(i) @@ "text-anchor" :> "middle" @@ "font-size" :> "9px"))>>,
-            [l \in {} |-> {} ])] \* Change the color of the text when deleting any server
+                [stroke |-> "black", fill |-> ServerFill(i)]),
+            Text(XBase + 15, YBase + (i-1) * Spacing + 20, id, 
+                ("fill" :> TextFill(i) @@ "text-anchor" :> "middle" @@ "font-size" :> "9px"))>>,
+            [l \in {} |-> {} ])]
 
 line == Rect(XBase -80, YBase-2, 200, 1, ("fill" :> "white" @@ "stroke" :> "black"))
 
 extras == <<line>>
 clientAnim == <<client>> \o opsElems \o msgsElems
+\* serverAnim == cs \o mAcks \o bufElems \o readqElems
 serverAnim == cs \o mAcks \o logElems \o bufElems \o readqElems
 
 AnimView == Group(serverAnim \o clientAnim \o extras, [i \in {} |-> {}])
@@ -260,20 +277,27 @@ vars == CPvars
 Init == CPInit
 
 Next ==
+    \* Client actions
     \/ \E v \in Val : ClientSendWrite(v)
     \/ ClientSendRead
+    \/ \E m \in msgs : ClientRecvWrite(m)
+    \/ \E m \in msgs : ClientRecvRead(m)
+  
+    \* Server actions
     \/ \E s \in Server : LeaderSendNoOP(s)
     \/ \E s \in Server : LeaderRecvAcceptAck(s)
-    \/ \E s \in Server : RecvAccept(s)
+    \/ \E s \in Server : RecvAccept(s) /\ UNCHANGED ops
     \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m)
     \/ \E s \in Server : \E m \in msgs : RecvRead(s, m)
-    \/ \E m \in msgs : ClientRecvWrite(m)
-    \/ \E m \in msgs : ClientRecvRead(m)  
-    \/ \E s \in Server : SuspectNextNode(s) 
     
+    \* FT actions
+    \/ \E s \in Server : SuspectNextNode(s)
+    \/ \E s \in Server : AddNewNode(s)
+    \/ \E s \in Server : \E m \in msgs : RecvStateTransfer(s, m)
+    \* \/ \E s \in Server : Restart(s)
 
 =============================================================================
 \* Modification History
-\* Last modified Tue May 06 22:13:09 IST 2025 by jay
+\* Last modified Fri Aug 15 19:11:56 IST 2025 by jay
 \* Last modified Mon Apr 21 18:43:16 IST 2025 by Kotikala Raghav
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav

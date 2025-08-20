@@ -1,6 +1,6 @@
------------------------------ MODULE ChainPaxosPAnim ------------------------
+----------------------------- MODULE ChainPaxosP2Anim ------------------------
 
-EXTENDS ChainPaxosP
+EXTENDS ChainPaxosP2
 
 \* Merge two records
 Merge(r1, r2) == 
@@ -57,22 +57,22 @@ c2 == Circle(20, 10, 5, [fill |-> "red"])
 ----------------------------------------
 \* Offsets
 
-Spacing == 35
+Spacing == 36
 
 \* General bases
 XBase == 20
-YBase == 58
+YBase == 62
 
 \* Client bases
 CXBase == XBase + 15
-CYBase == YBase - 24
+CYBase == YBase - 17
 
 ----------------------------------------
 \* Client Symbol
 
 client == Group(<<
-            Circle(CXBase, CYBase + 9 , 12, ("stroke" :> "black" @@ "fill" :> "pink")),
-            Text(CXBase, CYBase + 12, "Client", ("fill" :> "black" @@ "text-anchor" :> "middle" @@ "font-size" :> "8px"))>>,
+            Circle(CXBase, CYBase + 8 , 12, ("stroke" :> "black" @@ "fill" :> "pink")),
+            Text(CXBase, CYBase + 11, "Client", ("fill" :> "black" @@ "text-anchor" :> "middle" @@ "font-size" :> "8px"))>>,
             [l \in {} |-> {} ])
 
 ----------------------------------------
@@ -263,27 +263,39 @@ cs == [i \in Server |->
 
 ----------------------------------------
 \* H and P Elements
-                          
-hEntry(ind, xbase, ybase) == Group(<<Rect(xbase + 30, ybase, 10, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")),
-                                   Text(xbase + 33, ybase + 8, ToString(h[ind]), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
 
-hElems ==  [ind \in DOMAIN h |-> hEntry(ind, XBase + 12 * (ind-1) - 20, YBase - 57)]
+EYBase == YBase - 3
 
-pEntry(ind, xbase, ybase) == Group(<<Rect(xbase + 30, ybase, 10, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")),
-                                   Text(xbase + 33, ybase + 8, ToString(p[ind]), ("text-anchor" :>  "start") @@ "font-size" :> "8px")>>, [l \in {} |-> {}])
+hElems == Group(<<Text(XBase + 12, EYBase - 49, ToString(curVal), ("text-anchor" :>  "center" @@ "font-size" :> "9px"))>>, [l \in {} |-> {}])
 
-pElems ==  [ind \in DOMAIN p |-> pEntry(ind, XBase + 12 * (ind-1) - 20, YBase - 44)]
+rvVal(val) == IF val = Nil THEN "_"
+              ELSE ToString(val)
 
-labels == Group(<<Text(XBase + 8, YBase - 49, "h:", ("text-anchor" :>  "end" @@ "font-size" :> "9px")),
-     			  Text(XBase + 8, YBase - 37, "p:", ("text-anchor" :>  "end" @@ "font-size" :> "9px"))>>, [l \in {} |-> {}])
+rvReqEntry(id, xbase, ybase) == Group(<<Rect(xbase + 1, ybase, 10, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
+                                Text(xbase + 6, ybase + 8, ToString(id), ("fill" :> "black" @@ "text-anchor" :>  "middle" @@ "font-size" :> "8px"))>>, [l \in {} |-> {}])
+
+rvValEntry(val, xbase, ybase) == Group(<<Rect(xbase + 1, ybase + 10, 10, 10, ("fill" :> "lightgray" @@ "stroke" :> "black")), 
+                                   Text(xbase + 6, ybase + 18, rvVal(val), ("fill" :> "black" @@ "text-anchor" :>  "middle" @@ "font-size" :> "8px"))>>, [l \in {} |-> {}])
+
+rvEntry(id, xbase, ybase) == Group(<<rvReqEntry(id, xbase, ybase), rvValEntry(returnVal[id], xbase, ybase)>>, [l \in {} |-> {}])
+
+rvElems == LET indSeq == SetToSeqAsc(DOMAIN returnVal)
+           IN Group([ind \in DOMAIN indSeq |-> 
+                        LET id == indSeq[ind]
+                        IN rvEntry(id, XBase + 12 * (ind-1) + 10, EYBase - 44)], [l \in {} |-> {}])
+
+labels == Group(<<Text(XBase + 8, EYBase - 49, "curVal:", ("text-anchor" :>  "end" @@ "font-size" :> "8px")),
+                  Text(XBase + 8, EYBase - 37, "returnVal:", ("text-anchor" :>  "end" @@ "font-size" :> "8px"))>>, [l \in {} |-> {}])
+
 ----------------------------------------
 \* Extras
 
-line == Rect(XBase -80, YBase+1, 200, 1, ("fill" :> "white" @@ "stroke" :> "black"))
+line == Rect(XBase -80, YBase+5, 200, 1, ("fill" :> "white" @@ "stroke" :> "black"))
 
 ----------------------------------------
 
-extras == <<line>> \o hElems \o pElems \o <<labels>>
+\* extras == <<line>> \o <<hElems>> \o <<labels>> \o rvElems
+extras == <<line>> \o <<hElems>> \o <<labels>> \o <<rvElems>>
 clientAnim == <<client>> \o opsElems \o msgsElems
 serverAnim == cs \o mAcks \o logElems \o bufElems \o readqElems
 
@@ -297,26 +309,27 @@ Init == CPInitP
 
 Next ==
     \* Client actions
-    \/ \E v \in Val : ClientSendWrite(v) /\ UNCHANGED <<h, p>>
-    \/ ClientSendRead /\ UNCHANGED <<h, p>>
-    \/ \E m \in msgs : ClientRecvWrite(m) /\ UNCHANGED <<h, p>>
-    \/ \E m \in msgs : ClientRecvRead(m) /\ UNCHANGED <<h, p>>
+    \/ \E v \in Val : ClientSendWrite(v) /\ UNCHANGED <<curVal, returnVal>>
+    \/ ClientSendRead /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E m \in msgs : ClientRecvWrite(m) /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E m \in msgs : ClientRecvReadP(m)
 
     \* Server actions
-    \* \/ \E s \in Server : LeaderSendNoOPP(s) /\ UNCHANGED <<h, p>>
-    \/ \E s \in Server : LeaderRecvAcceptAckP(s)
-    \/ \E s \in Server : RecvAcceptP(s) /\ UNCHANGED ops
-    \/ \E s \in Server : \E m \in msgs : LeaderRecvWriteP(s, m)
-    \/ \E s \in Server : \E m \in msgs : RecvRead(s, m) /\ UNCHANGED <<h, p>>
+    \/ \E s \in Server : LeaderRecvAcceptAck(s) /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E s \in Server : RecvAcceptP(s)
+    \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m) /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E s \in Server : \E m \in msgs : RecvRead(s, m) /\ UNCHANGED <<curVal, returnVal>>
 
     \* FT actions
-    \/ \E s \in Server : SuspectNextNode(s) /\ UNCHANGED <<h, p>>
-    \/ \E s \in Server : AddNewNode(s) /\ UNCHANGED <<h, p>>
-    \/ \E s \in Server : \E m \in msgs : RecvStateTransfer(s, m) /\ UNCHANGED <<h, p>>
-    \* \/ \E s \in Server : Restart(s) /\ UNCHANGED <<h,p>>
+    \/ \E s \in Server : SuspectNextNode(s) /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E s \in Server: AddNewNode(s) /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E s \in Server : \E m \in msgs : RecvStateTransfer(s, m) /\ UNCHANGED <<curVal, returnVal>>
+    \* \/ \E s \in Server : Restart(s) /\ UNCHANGED <<curVal, returnVal>>
+    
+    \/ \E i \in DOMAIN ops : CommitRead(i)
 
 =============================================================================
 \* Modification History
-\* Last modified Wed Apr 23 22:54:06 IST 2025 by jay
+\* Last modified Wed Aug 20 23:15:49 IST 2025 by jay
 \* Last modified Mon Apr 21 18:43:16 IST 2025 by Kotikala Raghav
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav
