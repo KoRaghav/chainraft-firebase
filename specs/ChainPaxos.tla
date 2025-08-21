@@ -447,7 +447,7 @@ RecvAccept(s) ==
                                    mAck   |-> mAck]
              IN 
              
-                /\ IF isMid /\ m.val \in Val /\ ops[m.id].status = "Pending"
+                /\ IF decided /\ m.val \in Val /\ ops[m.id].status = "Pending"
                    THEN ops' = [ops EXCEPT ![m.id].status = "Committed"]
                    ELSE UNCHANGED ops
                 

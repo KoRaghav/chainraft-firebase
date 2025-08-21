@@ -15,9 +15,11 @@ CPTypeOKP == /\ CPTypeOK
 RecvAcceptP(s) ==
     /\ buf[s] # << >>
     /\ LET m == Head(buf[s])
+           nAcpt == IF m.ni \in DOMAIN log[s] /\ log[s][m.ni].na >=  m.na
+                    THEN MAX({m.nAcpt+1, log[s][m.ni].nAcpt})
+                    ELSE m.nAcpt+1
        IN /\ m.type = "Accept"
-          /\ IF /\ IsQuorum(m.nAcpt + 1, Len(chain[s]))
-                /\ ~IsQuorum(m.nAcpt, Len(chain[s]))
+          /\ IF /\ IsQuorum(nAcpt, Len(chain[s]))
                 /\  m.val \in Val
                 /\ ops[m.id].status = "Pending"
              THEN curVal' = m.val
