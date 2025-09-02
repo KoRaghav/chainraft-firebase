@@ -1367,7 +1367,7 @@ function makeSvgAnimObj(tlaAnimElem) {
         let nodes = attrs.applyArg(new StringValue("V"));
         let edges = attrs.applyArg(new StringValue("E"));
         let nodeAttrsFn = attrs.applyArg(new StringValue("nodeAttrsFn"));
-        console.log(attrs)
+        // console.log(attrs)
         let edgeAttrsFn = attrs.applyArg(new StringValue("edgeAttrsFn"));
 
         // console.log("nodes:", nodes);
@@ -1380,7 +1380,7 @@ function makeSvgAnimObj(tlaAnimElem) {
             let node = nodes.getElems()[i];
             let nodeStr = node.toString();
 
-            console.log(nodeAttrsFn.getDomain())
+            // console.log(nodeAttrsFn.getDomain())
 
             let nodeAttrsObj = {};
             nodeAttrsFn.applyArg(node).getDomain().forEach(v => {
@@ -1403,7 +1403,7 @@ function makeSvgAnimObj(tlaAnimElem) {
             let from = edge.getValues()[0].getVal();
             let to = edge.getValues()[1].getVal();
             let edgeAttrsStr = Object.entries(edgeAttrsObj).map(([key, value]) => `${key}="${value}"`).join(",");
-            let edgeStr = `  ${from} -> ${to} [${edgeAttrsStr}];`;
+            let edgeStr = `  "${from}" -> "${to}" [${edgeAttrsStr}];`;
             graphvizStr += `${edgeStr}\n`;
         }
         graphvizStr += `}`;
@@ -1808,9 +1808,18 @@ function componentTraceViewer(hidden) {
     if (model.traceLoadingError) {
         return m("div", { hidden: hidden }, [
             m("div", { class: "pane-heading", id: "", style: "margin-top: 10px;"  }, [
-                m("div", { class: "alert alert-danger" }, [
-                    m("strong", "Error loading trace: "),
-                    model.traceLoadingError
+                m("div", { class: "alert alert-danger d-flex justify-content-between align-items-center" }, [
+                    m("div", [
+                        m("strong", "Error loading trace: "),
+                        model.traceLoadingError
+                    ]),
+                    m("button", {
+                        class: "btn btn-outline-danger btn-sm",
+                        onclick: () => {
+                            model.traceLoadingError = null;
+                            resetTrace();
+                        }
+                    }, "Reset Trace")
                 ])
             ])
         ]);
@@ -2390,7 +2399,7 @@ function stateSelectionPane(hidden){
         // chooseConstantsPane(),
         fullNextStatesSwitch,
         // m("h5", { id: "poss-next-states-title", class: "" }, (model.currTrace.length > 0) ? "Choose Next Action" : "Choose Initial State"),
-        model.traceLoadingInProgress ? m("div", {style: "padding:20px;color:gray;"}, "Waiting for trace to load...") : stateChoicesDiv,
+        model.traceLoadingInProgress || model.traceLoadingError ? m("div", {style: "padding:20px;color:gray;"}, "Waiting for trace to load...") : stateChoicesDiv,
     ]);    
 }
 
@@ -2558,7 +2567,7 @@ function midPane() {
     return [
         m("div", { 
             id: "mid-pane", 
-            style: {width: model.tracePaneHidden ? "90%" : "40%"} 
+            style: {width: model.tracePaneHidden ? "90%" : "45%"} 
         }, tabs)
     ];
 }
@@ -2662,7 +2671,7 @@ function tracePane() {
 
     return m("div", { 
             id: "trace-container", 
-            style: {width: model.tracePaneHidden ? "5%" : "60%"}
+            style: {width: model.tracePaneHidden ? "5%" : "55%"}
         }, [
         tabs,
         otherTabs
@@ -2703,10 +2712,19 @@ function animationPane(hidden) {
             ]);
         }
 
+
+        let svgParams = { 
+            width: "100%", 
+            height: "100%", 
+            style: { border: "0px solid red" } 
+        }
+
+        // svgParams.viewBox =  "0 0 320 320";
+
         return m("div", { id: "trace-and-buttons-container", hidden: hidden }, [
             componentButtonsContainer(),
             traceStateCounter(),
-            m("div", { id: "anim-div" }, m("svg", { width: "100%", height: "100%", viewBox: "0 0 200 240" }, [viewSvgObj]))
+            m("div", { id: "anim-div", }, m("svg", svgParams, [viewSvgObj]))
         ]);
     }
 }
@@ -2742,7 +2760,7 @@ function replPane(hidden) {
                 value: model.replInput,
                 placeholder: "Enter TLA+ expression."
             }),
-            m("h5", { id: "repl-tifftle", class: "panje-title", style:"margin-top:20px" }, "Result"),
+            m("h5", { id: "repl-tifftle", class: "panje-title", style:"margin-top:20px" }, "Output"),
             m("div", { id: "repl-result" }, replResult())
         ])
     ]);
@@ -2753,13 +2771,13 @@ function checkPane(hidden) {
     if(model.invariantCheckingResponse !== undefined){
         invCheckStatesExplored = model.invariantCheckingResponse.numStatesExplored; 
     }
-    return m("div", {hidden: hidden, style: {margin: "20px"}}, [
+    return m("div", {hidden: hidden, style: {"margin-top": "20px"}}, [
         m("div", {style: {display: "flex", gap: "10px"}}, [
             m("input", {
                 class: "form-control",
                 placeholder: "Enter TLA+ state predicate.",
                 value: model.invariantExprToCheck,
-                style: {width: "500px", "font-family": "monospace", "font-size": "14px"},
+                style: {width: "500px", "font-family": "monospace"},
                 oninput: (e) => model.invariantExprToCheck = e.target.value
             }),
             m("button", {
@@ -3085,13 +3103,13 @@ async function loadApp() {
                 codeEditor = CodeMirror.fromTextArea(codeInput, {
                     lineNumbers: true,
                     showCursorWhenSelecting: true,
-                    fontSize: "11px",
+                    fontSize: "13px",
                     theme: "default",
                     // TODO: Work out tlaplus mode functionality for syntax highlighting.
                     // mode:"tlaplus"
                 });
                 // Set font size using CSS
-                codeEditor.getWrapperElement().style.fontSize = "11px";
+                codeEditor.getWrapperElement().style.fontSize = "13px";
             }
         },
         onupdate: function () {

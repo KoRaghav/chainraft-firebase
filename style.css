@@ -445,7 +445,7 @@ body {
 
   svg {
     width:100%;
-    height: 90%;
+    height: 95%;
   }
 
   .th-state-varname:hover{
@@ -788,7 +788,7 @@ body {
     /* bottom: 0; */
     /* width:20%; */
     /* right: 30%; */
-    padding-left:10px;
+    padding-left:0px;
     /* overflow: auto; */
     /* overflow: scroll; */
     /* border-right:solid 0.5px lightgray; */
