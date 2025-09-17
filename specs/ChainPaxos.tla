@@ -8,7 +8,7 @@ CONSTANT C,     \* Number of servers
          Nil    \* MV
 
 Server == 1..MaxC
-MinQuoromSize == (C \div 2) + 1
+MinQuorumSize == (C \div 2) + 1
      
 -----------------------------------------------------------------------------
 (* Client-Side Variables *)
@@ -26,7 +26,7 @@ clientVars == <<ops, msgs>>
 
 NoOP == [type : {"NoOP"}]
 RemoveNode == [type : {"RemoveNode"}, srv : Server]
-AddNode == [type : {"AddNode"}, srv : Server]
+AddNode == [type : {"AddNode"}, idx : 1..MaxC \union {Nil}, srv : Server]
 PrepareNum == [seqn : Nat, srv : Server]
 
 LogEntry == [id  : DOMAIN ops \union {Nil},
@@ -37,7 +37,7 @@ StateTransfer == [type   : {"StateTransfer"},
                   ldr    : Server,
                   chain  : Seq(Server),
                   log    : Seq(LogEntry),
-                  term   : Nat,
+                  term   : PrepareNum,
                   mAck   : Nat]
 
 Message ==
@@ -53,6 +53,16 @@ Message ==
     [type : {"AcceptAck"},
      ni   : Nat]
 
+ElectionMessage ==
+    [type : {"Prepare"},
+     ni   : Nat,
+     np   : PrepareNum] \union
+    [type    : {"PrepareOk"},
+     ni      : Nat,
+     np      : PrepareNum,
+     accepts : Seq(LogEntry),
+     srv     : Server]
+
 ClientMessage ==
     [type : {"WriteRequest"},
      id   : DOMAIN ops,
@@ -66,7 +76,8 @@ ClientMessage ==
      val  : Val \union {Nil}]
 
 TypeClientVars == /\ ops \in Seq(Operation)
-                  /\ msgs \subseteq ClientMessage \union RemoveNode \union AddNode \union StateTransfer
+                  /\ msgs \subseteq ClientMessage \union RemoveNode \union
+                        AddNode \union StateTransfer \union ElectionMessage 
 
 InitClientVars == /\ ops = << >>
                   /\ msgs = {}
@@ -83,14 +94,15 @@ VARIABLE cnextok,
 orgVars == <<cnextok, csleader, marked, chain, state>>
 
 
-TypeOrgVars == /\ cnextok \in [Server -> Server]
-               /\ csleader \in [Server -> Server]
+TypeOrgVars == /\ cnextok \in [Server -> Server] 
+               /\ csleader \in [Server -> Server \union {Nil}]
                /\ marked \in [Server -> SUBSET Server]
                /\ chain \in [Server -> Seq(Server)]
                /\ state \in [Server -> {"IDLE", "JOINING", "ACTIVE", "FAILED"}]
 
+                  \*TODO: cnextok is initially Nil for servers after C 
 InitOrgVars == /\ cnextok = [s \in Server |-> IF s >= C THEN 1 ELSE s+1]
-               /\ csleader = [s \in Server |-> 1]
+               /\ csleader = [s \in Server |-> IF s <= C THEN 1 ELSE Nil]
                /\ marked = [s \in Server |-> {}]
                /\ chain = [s \in Server |-> [s_ \in 1..C |-> s_]]
                /\ state = [s \in Server |-> IF s <= C THEN "ACTIVE" ELSE "IDLE"] 
@@ -117,15 +129,22 @@ InitLogVars == /\ log = [s \in Server |->  << >>]
 (* Leader Variables *)       
 
 VARIABLE maxAcpt,
-         pending
+         pending,
+         prepareResponses
          
-leaderVars == <<maxAcpt, pending>>
+leaderVars == <<maxAcpt, pending, prepareResponses>>
 
 TypeLeaderVars == /\ maxAcpt \in [Server -> Nat]
                   /\ pending \in [Server -> SUBSET DOMAIN ops]
+                  /\ DOMAIN prepareResponses = Server
+                  /\ \A s \in Server :
+                    /\ DOMAIN prepareResponses[s] \subseteq PrepareNum
+                    /\ \A i \in DOMAIN prepareResponses[s] :
+                        /\ prepareResponses[s][i] \subseteq Server
 
 InitLeaderVars == /\ maxAcpt = [s \in Server |-> 0]
                   /\ pending = [s \in Server |-> {}]
+                  /\ prepareResponses = [s \in Server |-> << >>]
   
 -----------------------------------------------------------------------------
 (* All Server Variables *)      
@@ -159,19 +178,22 @@ TypeServerVars ==
 VARIABLE noopLog,
          removeNodeLog,
          addNodeLog,
+         electionLog,
          numFails
 
 TypeHisVars == /\ noopLog \in Seq(Nat)          \* Log indices of noop operations
                /\ removeNodeLog \in Seq(Server) \* Servers to be removed 
                /\ addNodeLog \in Seq(Server)    \* Servers to be added 
+               /\ electionLog \in Seq(Server)   \* Server tries to become leader
                /\ numFails \in Nat           \* Number of restarts possible
 
 InitHisVars == /\ noopLog = << >>
                /\ removeNodeLog = << >>
                /\ addNodeLog = << >>
+               /\ electionLog = << >>
                /\ numFails = 0
 
-hisVars == <<noopLog, removeNodeLog, addNodeLog, numFails>>
+hisVars == <<noopLog, removeNodeLog, addNodeLog, electionLog, numFails>>
 
 -----------------------------------------------------------------------------
 
@@ -207,14 +229,14 @@ RecNextOK(chain_, marked_, i) ==
     ELSE IF chain_[i] \in marked_ THEN RecNextOK(chain_, marked_, i+1)
     ELSE chain_[i]
 
-NextNodeNotMarked(s, chain_, marked_, ldr) ==
+NextNodeNotMarked(s, chain_, marked_) ==
     LET idx == CHOOSE x \in DOMAIN chain_ : chain_[x] = s
-    IN IF idx >= Len(chain_) THEN ldr
+    IN IF idx >= Len(chain_) THEN RecNextOK(chain_, marked_, 1)
        ELSE RecNextOK(chain_, marked_, idx+1)
 
 IsQuorum(nAcpt, chainSize) == 
-    LET quoromSize == IF (chainSize \div 2) + 1 <= MinQuoromSize 
-                      THEN MinQuoromSize
+    LET quoromSize == IF (chainSize \div 2) + 1 <= MinQuorumSize 
+                      THEN MinQuorumSize
                       ELSE (chainSize \div 2) + 1
     IN  nAcpt >= quoromSize
 
@@ -223,7 +245,7 @@ isNpGreaterThan(np1, np2) ==
     \/ /\ np1.seqn = np2.seqn
        /\ np1.srv > np2.srv
 
-IsEnoughSrvs(s) == Cardinality(DOMAIN chain[s]) >= MinQuoromSize
+IsEnoughSrvs(s) == Cardinality(DOMAIN chain[s]) >= MinQuorumSize
 
 IsSelfRemv(s, val) == val \in RemoveNode /\ val.srv = s
 
@@ -283,7 +305,8 @@ LeaderSendNoOP(s) ==
                  nAcpt  |-> 0,
                  mAck   |-> maxAck[s]])]
     /\ noopLog' = Append(noopLog, maxAcpt[s] + 1)
-    /\ UNCHANGED <<ops, msgs, readQueue, orgVars, logVars, removeNodeLog, pending, addNodeLog, numFails>>
+    /\ UNCHANGED <<ops, msgs, prepareResponses, readQueue, orgVars, logVars,
+                    removeNodeLog, pending, addNodeLog, numFails, electionLog>>
 
 \* Leader receives a write/RemoveNode/AddNode message (and starts instance)
 LeaderRecvWrite(s, m) ==
@@ -299,12 +322,14 @@ LeaderRecvWrite(s, m) ==
                  ldr    |-> s,
                  na     |-> np[s],
                  id     |-> IF IsRemNode(m) \/ IsAddNode(m) THEN Nil ELSE m.id,
-                 val    |-> IF IsRemNode(m) \/ IsAddNode(m) THEN m ELSE m.val,
+                 val    |-> IF IsRemNode(m) THEN m ELSE IF IsAddNode(m)
+                            THEN [m EXCEPT !.idx = CHOOSE i \in
+                                DOMAIN chain[s] : chain[s][i] = s] ELSE m.val,
                  nAcpt  |-> 0,
                  mAck   |-> maxAck[s]]>>]
     /\ pending' = [pending EXCEPT ![s] = @ \union
                     IF m \notin (RemoveNode \union AddNode) THEN {m.id} ELSE {}]
-    /\ UNCHANGED <<ops, readQueue, orgVars, logVars, hisVars>>  
+    /\ UNCHANGED <<ops, prepareResponses, readQueue, orgVars, logVars, hisVars>>  
 
 -----------------------------------------------------------------------------
 (* Helper Functions *) 
@@ -318,7 +343,7 @@ RmvSrv(ch, r, i) ==
     ELSE Append(RmvSrv(ch,r,i-1), ch[i])
 
 UpdatedOrgVars(s, logIdx, newLog) ==
-    (* Returns tuple of (newChain, newMarked) *)
+    (* Returns tuple of (newMarked, newChain) *)
     IF logIdx = {} THEN <<marked[s], chain[s]>>
     ELSE LET i == MAX(logIdx)
              inst == newLog[i]
@@ -327,7 +352,8 @@ UpdatedOrgVars(s, logIdx, newLog) ==
          IN IF IsRemNode(inst.val)
             THEN <<recVal[1] \ {inst.val.srv}, RmvSrv(recVal[2], {inst.val.srv}, Len(recVal[2]))>>
             ELSE IF inst.val.srv \notin SeqToSet(recVal[2])
-            THEN <<recVal[1], Append(recVal[2], inst.val.srv)>>
+            THEN <<recVal[1], Append(SubSeq(recVal[2], 1, inst.val.idx-1), inst.val.srv) \o
+                                        SubSeq(recVal[2], inst.val.idx, Len(recVal[2]))>>
             ELSE recVal
 
 GetUpdatedOrgVars(s, ldr, term, val, decided, ni, newLog) ==
@@ -342,9 +368,9 @@ GetUpdatedOrgVars(s, ldr, term, val, decided, ni, newLog) ==
                      ELSE newOrgVars[1]
 
     IN  IF IsSelfRemv(s,val) THEN << newMarked, newOrgVars[2], cnextok[s] >>
-        ELSE << newMarked, newOrgVars[2], NextNodeNotMarked(s, newOrgVars[2], newMarked, ldr) >>
+        ELSE << newMarked, newOrgVars[2], NextNodeNotMarked(s, newOrgVars[2], newMarked) >>
 
-UpdateLeaderInfo(s, leader, term, id, decided) ==
+UpdateLeaderInfo(s, leader, term) ==
     IF isNpGreaterThan(term, np[s])
     THEN /\ np' = [np EXCEPT ![s] = term]
          /\ csleader' = [csleader EXCEPT ![s] = leader]
@@ -456,7 +482,7 @@ RecvAccept(s) ==
                 /\ marked'  = [marked EXCEPT ![s] = newOrgVars[1]]
                 /\ chain'   = [chain EXCEPT ![s] = newOrgVars[2]]
                 /\ cnextok' = [cnextok EXCEPT ![s] = newCnextok]
-                /\ UpdateLeaderInfo(s, m.ldr, m.na, m.id, decided)
+                /\ UpdateLeaderInfo(s, m.ldr, m.na)
 
                 \* Update Log vars
                 /\ maxAck' = [maxAck EXCEPT ![s] = mAck]
@@ -513,7 +539,7 @@ LeaderRecvAcceptAck(s) ==
           /\ readQueue' = [readQueue EXCEPT ![s] = [i \in {j \in DOMAIN @ : j > mAck} |-> @[i]]]
           /\ msgs' = msgs \union Responses(s, Nil, mAck, FALSE, newLog)
 
-    /\ UNCHANGED <<ops, np, csleader, maxAcpt, hisVars, state>>
+    /\ UNCHANGED <<ops, np, csleader, maxAcpt, prepareResponses, hisVars, state>>
 
 RecvRead(s, m) ==
     /\ state[s] = "ACTIVE"
@@ -536,18 +562,16 @@ SuspectNextNode(s) ==
 
     /\ SendMsg([type |-> "RemoveNode", srv |-> cnextok[s]])
     /\ removeNodeLog' = Append(removeNodeLog, cnextok[s])
-    /\ UNCHANGED <<ops, serverVars, noopLog, addNodeLog, numFails>>
+    /\ UNCHANGED <<ops, serverVars, noopLog, addNodeLog, electionLog, numFails>>
 
 Fail(s) ==
-    /\ s # csleader[s]
-
     \* Restarts the server s
     /\ buf' = [buf EXCEPT ![s] = << >>]
     /\ readQueue' = [readQueue EXCEPT ![s] = << >>]
 
     \* orgVars
     /\ cnextok' = [cnextok EXCEPT ![s] = 1]
-    /\ csleader' = [csleader EXCEPT ![s] = 1]
+    /\ csleader' = [csleader EXCEPT ![s] = Nil]
     /\ marked' = [marked EXCEPT ![s] = {}]
     /\ chain' = [chain EXCEPT ![s] = << >>]
 
@@ -561,14 +585,15 @@ Fail(s) ==
     /\ msgs' = msgs \ {m \in msgs : /\ m.type = "StateTransfer"
                                     /\ m.dest = s}
 
-    /\ UNCHANGED <<np, leaderVars, ops, noopLog, removeNodeLog, addNodeLog>>
+    /\ UNCHANGED <<np, leaderVars, ops, noopLog, removeNodeLog, addNodeLog, electionLog>>
 
 AddNewNode(s) ==
     /\ state[s] = "IDLE"
     /\ state' = [state EXCEPT ![s] = "JOINING"]
-    /\ SendMsg([type |-> "AddNode", srv |-> s])
+    /\ SendMsg([type |-> "AddNode", idx |-> Nil, srv |-> s])
     /\ addNodeLog' = Append(addNodeLog, s)
-    /\ UNCHANGED <<ops, noopLog, removeNodeLog, numFails, buf, readQueue, cnextok, csleader, marked, chain, logVars, leaderVars>>
+    /\ UNCHANGED <<ops, noopLog, removeNodeLog, electionLog, numFails, buf,
+        readQueue, cnextok, csleader, marked, chain, logVars, leaderVars>>
 
 RecvStateTransfer(s, m) ==
     /\ m.type = "StateTransfer"
@@ -578,7 +603,7 @@ RecvStateTransfer(s, m) ==
        IN /\ RemoveMsg(m)
 
           \* orgVars
-          /\ cnextok'  = [cnextok EXCEPT ![s] = NextNodeNotMarked(s, m.chain, {}, m.ldr)]
+          /\ cnextok'  = [cnextok EXCEPT ![s] = NextNodeNotMarked(s, m.chain, {})]
           /\ csleader' = [csleader EXCEPT ![s] = m.ldr]
           /\ chain'    = [chain EXCEPT ![s] = m.chain]
 
@@ -590,6 +615,87 @@ RecvStateTransfer(s, m) ==
           /\ state' = [state EXCEPT ![s] = "ACTIVE"]
 
           /\ UNCHANGED <<ops, marked, leaderVars, buf, readQueue, hisVars>>
+
+TryToBecomeLeader(s) ==
+    /\ state[s] = "ACTIVE"
+    /\ IsEnoughSrvs(s)
+    
+    /\ s # csleader[s]
+    
+    \* To reduce state space    
+    /\ ~\E t \in Server : t = csleader[t]
+    
+    /\ np' = [np EXCEPT ![s] = [seqn |-> np[s].seqn+1, srv |-> s]]
+    /\ LET prepareNum == [seqn |-> np[s].seqn+1, srv |-> s]
+       IN /\ msgs' = msgs \union {[type |-> "Prepare",
+                             ni   |-> maxAck[s]+1,
+                             np   |-> prepareNum]}
+          /\ prepareResponses' = [prepareResponses EXCEPT ![s] = @ @@ (prepareNum :> {s})]
+    /\ electionLog' = Append(electionLog, s)          
+    /\ UNCHANGED <<ops, orgVars, log, maxAck, maxAcpt, pending, buf, readQueue,
+                    noopLog, removeNodeLog, addNodeLog, numFails>>
+
+RecvPrepare(s, m) ==
+    /\ state[s] = "ACTIVE"
+    /\ IsEnoughSrvs(s)
+    /\ m.type = "Prepare"
+    /\ s # m.np.srv 
+    /\ isNpGreaterThan(m.np, np[s])
+    /\ m.np.srv \in SeqToSet(chain[s])
+    /\ UpdateLeaderInfo(s, m.np.srv, m.np)
+    /\ marked' = [marked EXCEPT ![s] = {}]
+    /\ msgs' = msgs \union {[type    |-> "PrepareOk",
+                             ni      |-> m.ni,
+                             np      |-> m.np,
+                             accepts |-> [i \in 1..Len(log[s])-m.ni+1 |-> log[s][m.ni+i-1]],
+                             srv     |-> s]}
+    /\ UNCHANGED <<ops, cnextok, chain, state, log, maxAck,
+                    leaderVars, buf, readQueue, hisVars>>
+
+RECURSIVE ForceUpdateLog(_, _, _, _)
+
+ForceUpdateLog(s, l, entries, i) ==
+    IF entries = << >>
+    THEN l
+    ELSE LET entry == Head(entries)
+             updatedLog ==
+                IF i \notin DOMAIN log[s] \/ ~isNpGreaterThan(log[s][i].na, entry.na)
+                THEN [j \in DOMAIN l \union {i} |-> IF j # i THEN l[j]
+                            ELSE [entry EXCEPT !.nAcpt = 0, !.decided = FALSE]]
+                ELSE l
+         IN ForceUpdateLog(s, updatedLog, Tail(entries), i+1)
+                             
+RecvPrepareOk(s, m) ==
+    /\ state[s] = "ACTIVE"
+    /\ IsEnoughSrvs(s)
+    
+    /\ m.type = "PrepareOk"
+    /\ m.np.srv = s
+    /\ RemoveMsg(m)
+    /\ IF m.np \in DOMAIN prepareResponses[s]
+       THEN /\ ~isNpGreaterThan(np[s], m.np)
+            /\ LET updatedLog ==  ForceUpdateLog(s, log[s], m.accepts, m.ni)
+               IN /\ log' = [log EXCEPT ![s] = updatedLog]
+                  /\ maxAcpt' = [maxAcpt EXCEPT ![s] = MAX({@, Len(updatedLog)})]
+                  /\ IF Cardinality(prepareResponses[s][m.np] \union {m.srv}) >= MinQuorumSize
+                     THEN /\ csleader' = [csleader EXCEPT ![s] = s]
+                          /\ LET insts == [j \in 1..Len(updatedLog)-m.ni+1 |->
+                                [type   |-> "Accept",
+                                 ni     |-> m.ni+j,
+                                 ldr    |-> s,
+                                 na     |-> m.np,
+                                 id     |-> updatedLog[m.ni+j-1].id,
+                                 val    |-> updatedLog[m.ni+j-1].val,
+                                 nAcpt  |-> 0,
+                                 mAck   |-> maxAck[s]]]
+                             IN buf' = [buf EXCEPT ![s] = @ \o insts]
+                          /\ prepareResponses' = [prepareResponses EXCEPT ![s] =
+                                [j \in DOMAIN prepareResponses[s] \ {m.np} |-> @[j]]]
+                     ELSE /\ prepareResponses' = [prepareResponses EXCEPT ![s] = 
+                                    [@ EXCEPT ![m.np] = @ \union {m.srv}]]
+                          /\ UNCHANGED <<buf, csleader>>
+        ELSE UNCHANGED <<buf, log, maxAcpt, csleader, prepareResponses>>
+    /\ UNCHANGED <<ops, cnextok, marked, chain, state, np, maxAck, pending, readQueue, hisVars>>
 
 -----------------------------------------------------------------------------
 
@@ -613,10 +719,14 @@ CPNext ==
     \/ \E s \in Server : \E m \in msgs : RecvStateTransfer(s, m)
     \/ \E s \in Server : Fail(s)
     
+    \/ \E s \in Server : TryToBecomeLeader(s)
+    \/ \E s \in Server : \E m \in msgs : RecvPrepare(s, m)
+    \/ \E s \in Server : \E m \in msgs : RecvPrepareOk(s, m)
+    
 CPSpec == CPInit /\ [][CPNext]_CPvars
 
 =============================================================================
 \* Modification History
+\* Last modified Wed Sep 17 16:27:42 IST 2025 by Kotikala Raghav
 \* Last modified Wed Sep 17 16:18:46 IST 2025 by jay
-\* Last modified Wed Sep 03 16:19:44 IST 2025 by Kotikala Raghav
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav

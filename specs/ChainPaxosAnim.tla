@@ -290,7 +290,7 @@ Next ==
     \* Server actions
     \/ \E s \in Server : LeaderSendNoOP(s)
     \/ \E s \in Server : LeaderRecvAcceptAck(s)
-    \/ \E s \in Server : RecvAccept(s) /\ UNCHANGED ops
+    \/ \E s \in Server : RecvAccept(s)
     \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m)
     \/ \E s \in Server : \E m \in msgs : RecvRead(s, m)
     
@@ -299,6 +299,10 @@ Next ==
     \/ \E s \in Server : AddNewNode(s)
     \/ \E s \in Server : \E m \in msgs : RecvStateTransfer(s, m)
     \/ \E s \in Server : Fail(s)
+    
+    \/ \E s \in Server : TryToBecomeLeader(s)
+    \/ \E s \in Server : \E m \in msgs : RecvPrepare(s, m)
+    \/ \E s \in Server : \E m \in msgs : RecvPrepareOk(s, m)
 
 =============================================================================
 \* Modification History
