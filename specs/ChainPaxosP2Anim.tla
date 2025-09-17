@@ -61,7 +61,7 @@ Spacing == 36
 
 \* General bases
 XBase == 20
-YBase == 62
+YBase == 48
 
 \* Client bases
 CXBase == XBase + 15
@@ -217,6 +217,7 @@ logEntryStroke(id,ind) == IF log[id][ind].val \in RemoveNode THEN "red"
 
 logEntryText(id,ind) == IF IsRemNode(log[id][ind].val) \/ IsAddNode(log[id][ind].val)
                         THEN ToString(log[id][ind].val.srv)
+                        ELSE IF IsNoOP(log[id][ind].val) THEN "_"
                         ELSE ToString(log[id][ind].val)
 
 logEntry2(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, [fill |-> logEntryFill(id,ind), stroke |-> logEntryStroke(id,ind)]), 
@@ -264,7 +265,7 @@ cs == [i \in Server |->
 ----------------------------------------
 \* H and P Elements
 
-EYBase == YBase - 3
+EYBase == YBase + 20
 
 hElems == Group(<<Text(XBase + 12, EYBase - 49, ToString(curVal), ("text-anchor" :>  "center" @@ "font-size" :> "9px"))>>, [l \in {} |-> {}])
 
@@ -284,8 +285,7 @@ rvElems == LET indSeq == SetToSeqAsc(DOMAIN returnVal)
                         LET id == indSeq[ind]
                         IN rvEntry(id, XBase + 12 * (ind-1) + 10, EYBase - 44)], [l \in {} |-> {}])
 
-labels == Group(<<Text(XBase + 8, EYBase - 49, "curVal:", ("text-anchor" :>  "end" @@ "font-size" :> "8px")),
-                  Text(XBase + 8, EYBase - 37, "returnVal:", ("text-anchor" :>  "end" @@ "font-size" :> "8px"))>>, [l \in {} |-> {}])
+labels == Group(<<Text(XBase + 8, EYBase - 49, "curVal:", ("text-anchor" :>  "end" @@ "font-size" :> "8px"))>>, [l \in {} |-> {}])
 
 ----------------------------------------
 \* Extras
@@ -295,7 +295,7 @@ line == Rect(XBase -80, YBase+5, 200, 1, ("fill" :> "white" @@ "stroke" :> "blac
 ----------------------------------------
 
 \* extras == <<line>> \o <<hElems>> \o <<labels>> \o rvElems
-extras == <<line>> \o <<hElems>> \o <<labels>> \o <<rvElems>>
+extras == <<line>> \o <<hElems>> \o <<labels>>
 clientAnim == <<client>> \o opsElems \o msgsElems
 serverAnim == cs \o mAcks \o logElems \o bufElems \o readqElems
 
@@ -309,22 +309,23 @@ Init == CPInitP
 
 Next ==
     \* Client actions
-    \/ \E v \in Val : ClientSendWrite(v) /\ UNCHANGED <<curVal, returnVal>>
-    \/ ClientSendRead /\ UNCHANGED <<curVal, returnVal>>
-    \/ \E m \in msgs : ClientRecvWrite(m) /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E v \in Val : ClientSendWrite(v) /\ UNCHANGED curVal
+    \/ ClientSendRead /\ UNCHANGED curVal
+    \/ \E m \in msgs : ClientRecvWrite(m) /\ UNCHANGED curVal
     \/ \E m \in msgs : ClientRecvReadP(m)
 
     \* Server actions
-    \/ \E s \in Server : LeaderRecvAcceptAck(s) /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E s \in Server : LeaderSendNoOP(s) /\ UNCHANGED curVal
+    \/ \E s \in Server : LeaderRecvAcceptAck(s) /\ UNCHANGED curVal
     \/ \E s \in Server : RecvAcceptP(s)
-    \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m) /\ UNCHANGED <<curVal, returnVal>>
-    \/ \E s \in Server : \E m \in msgs : RecvRead(s, m) /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E s \in Server : \E m \in msgs : LeaderRecvWrite(s, m) /\ UNCHANGED curVal
+    \/ \E s \in Server : \E m \in msgs : RecvRead(s, m) /\ UNCHANGED curVal
 
     \* FT actions
-    \/ \E s \in Server : SuspectNextNode(s) /\ UNCHANGED <<curVal, returnVal>>
-    \/ \E s \in Server: AddNewNode(s) /\ UNCHANGED <<curVal, returnVal>>
-    \/ \E s \in Server : \E m \in msgs : RecvStateTransfer(s, m) /\ UNCHANGED <<curVal, returnVal>>
-    \* \/ \E s \in Server : Restart(s) /\ UNCHANGED <<curVal, returnVal>>
+    \/ \E s \in Server : SuspectNextNode(s) /\ UNCHANGED curVal
+    \/ \E s \in Server: AddNewNode(s) /\ UNCHANGED curVal
+    \/ \E s \in Server : \E m \in msgs : RecvStateTransfer(s, m) /\ UNCHANGED curVal
+    \/ \E s \in Server : Restart(s) /\ UNCHANGED curVal
     
     \/ \E i \in DOMAIN ops : CommitRead(i)
 

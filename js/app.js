@@ -3084,7 +3084,10 @@ async function loadApp() {
     // let specPath = "./specs/lockserver_nodefs_anim.tla";
     // let specPath = "./specs/MongoLoglessDynamicRaft.tla";
     // let specPath = "./specs/Paxos.tla";
-    model.specPath = "./specs/ChainPaxosP2Anim.tla";
+    model.specPath = "./specs/ChainPaxosAnim.tla";
+    // model.specPath = "./specs/ChainPaxosP2.tla";
+    // model.specPath = "./specs/ChainPaxosP2Anim.tla";
+    // model.specPath = "./specs/ChainPaxosPAnim.tla";
     // let specPath = "./specs/simple_test.tla";
     // model.specPath = "./specs/simple_lockserver.tla";
 

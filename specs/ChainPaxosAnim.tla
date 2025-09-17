@@ -207,6 +207,12 @@ bufElems ==  [i \in Server |-> bufElem(i, XBase, YBase + (i-1) * Spacing + 12)]
 ----------------------------------------
 \* Log Elements
 
+SetToSeqAsc(set) ==
+    LET n == Cardinality(set)
+    IN CHOOSE sq \in [1..n -> set] :
+                \A x, y \in 1..n :
+                    x < y => sq[x] < sq[y] 
+
 logEntryFill(id,ind) == IF ind <= maxAck[id] THEN "lightgreen"
                         ELSE IF log[id][ind].decided THEN "orange"
                         ELSE "lightgray"
@@ -217,6 +223,7 @@ logEntryStroke(id,ind) == IF log[id][ind].val \in RemoveNode THEN "red"
 
 logEntryText(id,ind) == IF IsRemNode(log[id][ind].val) \/ IsAddNode(log[id][ind].val)
                         THEN ToString(log[id][ind].val.srv)
+                        ELSE IF IsNoOP(log[id][ind].val) THEN "_"
                         ELSE ToString(log[id][ind].val)
 
 logEntry2(id, xbase, ybase, ind) == Group(<<Rect(xbase + 30, ybase, 10, 10, [fill |-> logEntryFill(id,ind), stroke |-> logEntryStroke(id,ind)]), 
@@ -238,18 +245,16 @@ mAcks == [i \in Server |-> mAckElem(i, XBase, YBase + (i-1) * Spacing + 27)]
 ----------------------------------------
 \* Server Elements
 
-IsRemoved(i) == \E j \in DOMAIN log[i] : /\ IsRemNode(log[i][j].val) 
-                                         /\ log[i][j] = i
+IsFailed(i) == state[i] = "FAILED"
+IsNotActive(i) == state[i] \in {"IDLE","JOINING"}
 
-IsAdded(i) == \E j \in DOMAIN chain[i] : chain[i][j] = i
-
-TextFill(i) == IF IsRemoved(i) THEN "white"
-               ELSE IF ~IsAdded(i) \/ csleader[i] = i THEN "black" 
+TextFill(i) == IF IsFailed(i) THEN "white"
+               ELSE IF IsNotActive(i) \/ csleader[i] = i THEN "black" 
                ELSE "lightgray"
 
-ServerFill(i) == IF IsRemoved(i) THEN "red"
+ServerFill(i) == IF IsFailed(i) THEN "red"
                  ELSE IF csleader[i] = i THEN "gold" 
-                 ELSE IF ~IsAdded(i) THEN "gainsboro"
+                 ELSE IF IsNotActive(i) THEN "gainsboro"
                  ELSE "gray"
 
 cs == [i \in Server |-> 
@@ -265,10 +270,9 @@ line == Rect(XBase -80, YBase-2, 200, 1, ("fill" :> "white" @@ "stroke" :> "blac
 
 extras == <<line>>
 clientAnim == <<client>> \o opsElems \o msgsElems
-\* serverAnim == cs \o mAcks \o bufElems \o readqElems
 serverAnim == cs \o mAcks \o logElems \o bufElems \o readqElems
 
-AnimView == Group(serverAnim \o clientAnim \o extras, [i \in {} |-> {}])
+AnimView == Group(serverAnim \o clientAnim \o extras, [transform |-> "translate(120, 5) scale(1.5)"])
 
 -----------------------------------------------------------------------------
 
@@ -294,7 +298,7 @@ Next ==
     \/ \E s \in Server : SuspectNextNode(s)
     \/ \E s \in Server : AddNewNode(s)
     \/ \E s \in Server : \E m \in msgs : RecvStateTransfer(s, m)
-    \* \/ \E s \in Server : Restart(s)
+    \/ \E s \in Server : Fail(s)
 
 =============================================================================
 \* Modification History
