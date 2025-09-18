@@ -79,35 +79,40 @@ client == Group(<<
 \* Client-Server messages Elements
 
 msgsReq(m) == IF m.type = "WriteRequest" THEN "WReq"
-                ELSE IF m.type = "WriteResponse" THEN "WRes"
-                ELSE IF m.type = "ReadRequest" THEN "RReq"
-                ELSE IF m.type = "RemoveNode" THEN "Remove"
-                ELSE IF m.type = "AddNode" THEN "Add"
-                ELSE IF m.type = "StateTransfer" THEN "State"
-                ELSE "RRes"
+              ELSE IF m.type = "WriteResponse" THEN "WRes"
+              ELSE IF m.type = "ReadRequest" THEN "RReq"
+              ELSE IF m.type = "RemoveNode" THEN "Remove"
+              ELSE IF m.type = "AddNode" THEN "Add"
+              ELSE IF m.type = "StateTransfer" THEN "State"
+              ELSE IF m.type = "Prepare" THEN "Prep(" \o ToString(m.np.srv) \o ")"
+              ELSE IF m.type = "PrepareOk" THEN "PrepOk"
+              ELSE "RRes"
 
-msgsVal(m) == IF m.type = "WriteRequest" \/ m.type = "ReadResponse"
-                THEN IF m.val = Nil THEN ToString(m.id) \o " | Nil"
-                     ELSE ToString(m.id) \o " | " \o ToString(m.val)
-                ELSE IF m.type = "ReadRequest" THEN ToString(m.id) \o " | " \o "?"
-                ELSE IF m.type = "RemoveNode" \/ m.type = "AddNode" THEN ToString(m.srv)
-                ELSE IF m.type = "StateTransfer" THEN ToString(m.dest)
-                ELSE ToString(m.id)
+msgsVal(m) == IF m.type \in {"WriteRequest", "ReadResponse"}
+              THEN IF m.val = Nil THEN ToString(m.id) \o " | Nil"
+                   ELSE ToString(m.id) \o " | " \o ToString(m.val)
+              ELSE IF m.type = "ReadRequest" THEN ToString(m.id) \o " | " \o "?"
+              ELSE IF m.type \in {"RemoveNode", "AddNode"} THEN ToString(m.srv)
+              ELSE IF m.type = "StateTransfer" THEN ToString(m.dest)
+            \*   ELSE IF m.type = "Prepare" THEN ToString(m.np.seqn) \o " | " \o ToString(m.np.srv)
+              ELSE IF m.type = "Prepare" THEN ToString(m.np.seqn)
+              ELSE IF m.type = "PrepareOk" THEN ToString(m.np.seqn) \o " | " \o ToString(m.srv)
+              ELSE ToString(m.id)
 
-msgsFill(m) == IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
-                 THEN "lightgray"
-                 ELSE "lightgray"
+msgsFill(m) == IF m.type \in {"WriteRequest", "ReadRequest"}
+               THEN "lightgray"
+               ELSE "lightgray"
 
-msgsText(m) == IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
-                 THEN "black"
-                 ELSE "black"
+msgsText(m) == IF m.type \in {"WriteRequest", "ReadRequest"}
+               THEN "black"
+               ELSE "black"
 
-msgsStroke(m) ==  IF m.type = "WriteRequest" \/ m.type = "ReadRequest"
-                    THEN "orange"
-                    ELSE IF m.type = "RemoveNode" THEN "red"
-                    ELSE IF m.type = "AddNode" THEN "dodgerblue"
-                    ELSE IF m.type = "StateTransfer" THEN "black"
-                    ELSE "green"
+msgsStroke(m) ==  IF m.type \in {"WriteRequest", "ReadRequest"}
+                  THEN "orange"
+                  ELSE IF m.type = "RemoveNode" THEN "red"
+                  ELSE IF m.type = "AddNode" THEN "dodgerblue"
+                  ELSE IF m.type \in {"StateTransfer", "Prepare"} THEN "black"
+                  ELSE "green"
 
 msgsReqEntry(xbase, ybase, m) == Group(<<Rect(xbase + 1, ybase, 28, 10, ("fill" :> msgsFill(m) @@ "stroke" :> msgsStroke(m))), 
                                    Text(xbase + 15, ybase + 8, msgsReq(m), ("fill" :> msgsText(m) @@ "text-anchor" :>  "middle") @@ "font-size" :> "7px")>>, [l \in {} |-> {}])
@@ -124,7 +129,7 @@ msgsElems ==  LET msgSeq == SetToSeq(msgs)
 opsReq(ind) == IF ops[ind].type = "Write" THEN "Write"
                ELSE "Read"
 
-opsVal(ind) == IF ops[ind].type = "Write" \/ ops[ind].status = "Done"
+opsVal(ind) == IF ops[ind].type \in {"Write", "Done"}
                THEN IF ops[ind].val = Nil THEN ToString(ind) \o " | Nil"
                     ELSE ToString(ind) \o " | " \o ToString(ops[ind].val)
                ELSE ToString(ind) \o " | " \o "?"
