@@ -245,8 +245,6 @@ isNpGreaterThan(np1, np2) ==
     \/ /\ np1.seqn = np2.seqn
        /\ np1.srv > np2.srv
 
-IsEnoughSrvs(s) == Cardinality(DOMAIN chain[s]) >= MinQuorumSize
-
 IsSelfRemv(s, val) == val \in RemoveNode /\ val.srv = s
 
 IsNoOP(val) == val \in NoOP
@@ -292,7 +290,6 @@ ClientRecvRead(m) ==
 \* Leader Sends the periodic NoOP (and starts instance)
 LeaderSendNoOP(s) == 
     /\ s = csleader[s]
-    /\ IsEnoughSrvs(s)
 
     /\ maxAcpt' = [maxAcpt EXCEPT ![s] = @ + 1]
     /\ buf' = [buf EXCEPT ![s] = Append(@,
@@ -311,7 +308,6 @@ LeaderSendNoOP(s) ==
 \* Leader receives a write/RemoveNode/AddNode message (and starts instance)
 LeaderRecvWrite(s, m) ==
     /\ s = csleader[s]
-    /\ IsEnoughSrvs(s)
     /\ m.type \in {"WriteRequest", "RemoveNode", "AddNode"}
 
     /\ RemoveMsg(m)
@@ -439,7 +435,6 @@ Forward(s, ldr, newNextOk, ni, inst, mAck) ==
 
 RecvAccept(s) ==
     /\ state[s] = "ACTIVE"
-    /\ IsEnoughSrvs(s) \* Should've MinQuoromSize nodes
     /\ buf[s] # << >>
     /\ LET m == Head(buf[s])
        IN /\ m.type = "Accept"
@@ -513,7 +508,6 @@ RecvAccept(s) ==
 
 LeaderRecvAcceptAck(s) ==
     /\ state[s] = "ACTIVE"
-    /\ IsEnoughSrvs(s)
     /\ s = csleader[s] 
     /\ buf[s] # << >>
 
@@ -543,7 +537,6 @@ LeaderRecvAcceptAck(s) ==
 
 RecvRead(s, m) ==
     /\ state[s] = "ACTIVE"
-    /\ IsEnoughSrvs(s)
     /\ m.type = "ReadRequest"
 
     /\ RemoveMsg(m)
@@ -557,7 +550,6 @@ RecvRead(s, m) ==
 \* Node s suspects that node cnextok[s] has failed
 SuspectNextNode(s) ==
     /\ state[s] = "ACTIVE"
-    /\ IsEnoughSrvs(s)
     /\ cnextok[s] # csleader[s] \* Cannot suspect leader
 
     /\ SendMsg([type |-> "RemoveNode", srv |-> cnextok[s]])
@@ -618,13 +610,7 @@ RecvStateTransfer(s, m) ==
 
 TryToBecomeLeader(s) ==
     /\ state[s] = "ACTIVE"
-    /\ IsEnoughSrvs(s)
-    
     /\ s # csleader[s]
-    
-    \* To reduce state space    
-    /\ ~\E t \in Server : t = csleader[t]
-    
     /\ np' = [np EXCEPT ![s] = [seqn |-> np[s].seqn+1, srv |-> s]]
     /\ LET prepareNum == [seqn |-> np[s].seqn+1, srv |-> s]
        IN /\ msgs' = msgs \union {[type |-> "Prepare",
@@ -637,7 +623,6 @@ TryToBecomeLeader(s) ==
 
 RecvPrepare(s, m) ==
     /\ state[s] = "ACTIVE"
-    /\ IsEnoughSrvs(s)
     /\ m.type = "Prepare"
     /\ s # m.np.srv 
     /\ isNpGreaterThan(m.np, np[s])
@@ -667,8 +652,6 @@ ForceUpdateLog(s, l, entries, i) ==
                              
 RecvPrepareOk(s, m) ==
     /\ state[s] = "ACTIVE"
-    /\ IsEnoughSrvs(s)
-    
     /\ m.type = "PrepareOk"
     /\ m.np.srv = s
     /\ RemoveMsg(m)
@@ -681,7 +664,7 @@ RecvPrepareOk(s, m) ==
                      THEN /\ csleader' = [csleader EXCEPT ![s] = s]
                           /\ LET insts == [j \in 1..Len(updatedLog)-m.ni+1 |->
                                 [type   |-> "Accept",
-                                 ni     |-> m.ni+j,
+                                 ni     |-> m.ni+j-1,
                                  ldr    |-> s,
                                  na     |-> m.np,
                                  id     |-> updatedLog[m.ni+j-1].id,
@@ -727,6 +710,6 @@ CPSpec == CPInit /\ [][CPNext]_CPvars
 
 =============================================================================
 \* Modification History
-\* Last modified Wed Sep 17 16:27:42 IST 2025 by Kotikala Raghav
+\* Last modified Thu Sep 18 16:31:03 IST 2025 by Kotikala Raghav
 \* Last modified Wed Sep 17 16:18:46 IST 2025 by jay
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav
