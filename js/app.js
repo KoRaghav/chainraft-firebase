@@ -15,7 +15,7 @@ let Pane = {
 
 let Tab = {
     StateSelection: 1,
-    Constants: 2,
+    Config: 2,
     SpecEditor: 3,
     Load: 4,
     EvalGraph: 5
@@ -31,6 +31,8 @@ let TraceTab = {
 let model = {
     specText: null,
     allInitStates: [],
+    initStatePredName: "Init",
+    nextStatePredName: "Next",
     nextStatePred: null,
     currState: null,
     currNextStates: [],
@@ -52,7 +54,7 @@ let model = {
     hiddenStateVars: [],
     // State hash that trace lasso goes back to.
     lassoTo: null,
-    errorObj: null,
+    errorInfo: null,
     currPane: Pane.Trace,
     tracePaneHidden: false,
     nextStatePreview: null,
@@ -73,6 +75,7 @@ let model = {
     generatingInitStates: false,
     // Special definition that will enable animation feature.
     animViewDefName: "AnimView",
+    animRenderTime: null,
     lockedTrace: null,
     lockedTraceActions: null,
     showStateDiffsInSelection: false,
@@ -213,6 +216,7 @@ const urlSearchParams = new URLSearchParams(window.location.search);
 const urlParams = Object.fromEntries(urlSearchParams.entries());
 let enableEvalTracing = false;
 let evalNodeGraphsPerAction = {};
+let evalNodeGraphsForAnimation = null;
 
 let invCheckerWebWorker = null;
 
@@ -441,16 +445,111 @@ function toggleHiddenConstants(){
     model.constantsPaneHidden = !model.constantsPaneHidden;
 }
 
-function componentChooseConstants(hidden) {
-    // If there are CONSTANT declarations in the spec, we must
-    // instantiate them with some concrete values.
-    if (_.isEmpty(model.specConsts)) {
-        return m("span", {}, "");
+
+function hideButtonDiv(){
+    let text = model.constantsPaneHidden ? "Show CONSTANTs" : "Hide CONSTANTs";
+    let hideButtonDiv = m("div", { id: "hide-constants-button", class: "btn btn-primary btn-sm", onclick: toggleHiddenConstants }, text)
+    return hideButtonDiv;
+}
+
+// Are the Init and Next predicate names present as definitions in the current spec.
+function initAndNextDefsValid(){
+    return model.spec && model.spec.hasDefinitionByName(model.nextStatePredName) && model.spec.hasDefinitionByName(model.initStatePredName);
+}
+
+function allConstValsSet(){
+    if(model.specConsts && Object.keys(model.specConsts).length === 0){
+        return true;
     }
-    // console.log("Instantiating spec constants.");
+    return model.specConstInputVals && model.specConsts &&
+        _.isEqual(Object.keys(model.specConstInputVals), Object.keys(model.specConsts)) &&
+        Object.values(model.specConstInputVals).every(val => val.length > 0);
+}
+
+function setConfigButtons(){
+
+    let disabled = false;
+    if (!initAndNextDefsValid()){
+        disabled = true;
+    }
+
+    // Check if all constants have values input for them.
+    if (!allConstValsSet()) {
+        disabled = true;
+    }
+
+    let setButtonDiv = m("button", { 
+        id: "set-constants-button", 
+        "data-testid": "set-config-button",
+        class: "btn btn-sm btn-primary", 
+        disabled: disabled,
+        onclick: () => {
+
+            // TODO: Properly clear out trace route params and constants and stuff.
+            model.currTrace = [];
+            model.currTraceActions = [];
+            model.currTraceAliasVals = [];
+            
+            // Re-set next state definitions and actions.
+            let nextDef = model.spec.getDefinitionByName(model.nextStatePredName);
+            model.nextStatePred = nextDef["node"];
+            model.actions = model.spec.parseActionsFromNode(nextDef["node"]);
+            updateTraceRouteParams();
+            setConstantValues();
+            model.selectedTab = Tab.StateSelection;
+            model.selectedTraceTab = TraceTab.Trace;
+        } 
+    }, "Set Config");
+    if(model.constantsPaneHidden){
+        // return [hideButtonDiv()];
+    }
+    return [setButtonDiv];
+}
+
+function initNextDef(){
+    return m("div", { style: { "margin-top": "15px", "margin-bottom": "15px" } }, [
+        m("h6", "Initial and Transition Predicates"),
+        m("table", {}, [
+            m("tr", {}, [
+                m("td", { style: { "padding-right": "10px", "vertical-align": "middle" } }, "Init:"),
+                m("td", {}, [
+                    m("input", {
+                        class: "form-control form-control-sm" + (model.spec && !model.spec.hasDefinitionByName(model.initStatePredName) ? " is-invalid" : ""),
+                        type: "text",
+                        value: model.initStatePredName,
+                        title: model.spec && !model.spec.hasDefinitionByName(model.initStatePredName) ? "Definition not found in specification" : "",
+                        oninput: (e) => {
+                            model.initStatePredName = e.target.value;
+                        }
+                    }),
+                    m("div", { class: "invalid-tooltip", hidden:  model.spec && !model.spec.hasDefinitionByName(model.initStatePredName)}, "Definition not found in specification") 
+                ])
+            ]),
+            m("tr", {}, [
+                m("td", { style: { "padding-right": "10px", "vertical-align": "middle" } }, "Next:"),
+                m("td", {}, [
+                    m("input", {
+                        class: "form-control form-control-sm" + (model.spec && !model.spec.hasDefinitionByName(model.nextStatePredName) ? " is-invalid" : ""),
+                        type: "text",
+                        value: model.nextStatePredName,
+                        title: model.spec && !model.spec.hasDefinitionByName(model.nextStatePredName) ? "Definition not found in specification" : "",
+                        oninput: (e) => {
+                            let exists = model.spec.hasDefinitionByName(e.target.value);
+                            console.log("exists:", exists);
+                            model.nextStatePredName = e.target.value;
+                        }
+                    }),
+                    m("div", { class: "invalid-tooltip", hidden:  model.spec && !model.spec.hasDefinitionByName(model.nextStatePredName)}, "Definition not found in specification") 
+                ])
+            ])
+        ])
+    ]);
+}
+
+function chooseConstantsTable(specConsts){
 
     let chooseConstsElems = [];
-    for (const constDecl in model.specConsts) {
+    for (const constDecl in specConsts) {
         let newRow = m("tr", {}, [
             m("td", { style: { "vertical-align": "middle" } }, constDecl),
             m("td", { style: { "vertical-align": "middle" } }, "←"),
@@ -484,41 +583,26 @@ function componentChooseConstants(hidden) {
     }
 
     chooseConstsTable = m("table", {id:"choose-constants-table"}, chooseConstsElems);
+    return chooseConstsTable;
+}
 
+function componentChooseConfig(hidden) {
+    // If there are CONSTANT declarations in the spec, we must
+    // instantiate them with some concrete values.
+    // if (_.isEmpty(model.specConsts)) {
+        // return m("span", {}, "");
+    // }
+    // console.log("Instantiating spec constants.");
 
-    function hideButtonDiv(){
-        let text = model.constantsPaneHidden ? "Show CONSTANTs" : "Hide CONSTANTs";
-        let hideButtonDiv = m("div", { id: "hide-constants-button", class: "btn btn-primary btn-sm", onclick: toggleHiddenConstants }, text)
-        return hideButtonDiv;
-    }
+    let specConsts = model.specConsts || {};
 
-    function constantButtons(){
-        let setButtonDiv = m("button", { 
-            id: "set-constants-button", 
-            "data-testid": "set-constant-config-button",
-            class: "btn btn-sm btn-primary", 
-            onclick: () => {
-                setConstantValues();
-                model.selectedTab = Tab.StateSelection;
-            } 
-        }, "Set CONSTANTs");
-        if(model.constantsPaneHidden){
-            // return [hideButtonDiv()];
-        }
-        return [setButtonDiv];
-    }
-
-    return m("div", {id: "constants-box", hidden: hidden}, [
-        // m("div", { id: "constants-header" },
-        //     [
-                // Allow hiding of choose constants pane.
-                // m("div", { id: "constants-title", class: "pane-title", onclick: function(x){
-                //     model.constantsPaneHidden = !model.constantsPaneHidden;
-                // }}, "CONSTANT Instantiation"),
-        // m("div", { id: "set-constants-button" }, setButtonDiv),
-        m("div", { id: "constant-buttons-div" }, constantButtons()),
-            // ]),
-        m("div", { id: "choose-constants-elems", hidden: model.constantsPaneHidden }, chooseConstsTable),
+    return m("div", {id: "config-box", hidden: hidden, style: { "padding": "20px" }}, [
+        m("div", { id: "constant-buttons-div" }, setConfigButtons()),
+        m("div", { id: "constant-buttons-div", style: { "border-bottom": "1px solid #dee2e6" } }, initNextDef()),
+        m("div", { id: "choose-constants-elems", hidden: model.constantsPaneHidden || _.isEmpty(model.specConsts), style: { "margin-top": "15px" } }, [
+            m("h6", {style: { "margin-top": "15px" }}, "Instantiate Constants"),
+            chooseConstantsTable(specConsts)
+            ]),
     ]);
 }
 
@@ -572,7 +656,11 @@ function componentNextStateChoiceElementForAction(ind, actionLabel, nextStatesFo
             class: classList.join(" "), 
             "data-testid": "action-choice-param",
             // colspan: 2,
-            onclick: () => chooseNextState(hash, hashQuantBounds(quantBounds)),
+            onclick: (e) => {
+                // Explicit redraw will be triggered inside 'chooseNextState'.
+                e.redraw = false;
+                chooseNextState(hash, hashQuantBounds(quantBounds))
+            },
             // onmouseover: () => {
             //     // Enable if UI performance lag isn't too noticeable.
             //     console.log("onmouseover:", st["state"]);
@@ -598,10 +686,12 @@ function componentNextStateChoiceElementForAction(ind, actionLabel, nextStatesFo
     }
     let actionNameDiv = [m("div", {
         class: classList.join(" "),
-        onclick: function () {
+        onclick: function (e) {
             if (!actionDisabled && actionLabelObj.params.length == 0) {
                 let hash = nextStatesForAction[0]["state"].fingerprint();
                 console.log("choose next hash:", hash);
+                // Explicit redraw will be triggered inside 'chooseNextState'.
+                e.redraw = false;
                 chooseNextState(hash);
             }
         }
@@ -695,7 +785,11 @@ function componentNextStateChoiceElement(stateObj, ind, actionLabel, diffOnly) {
         class: "init-state next-state-choice-full",
         style: `opacity: ${opac}%`,
         "data-testid": "next-state-choice",
-        onclick: () => chooseNextState(hash),
+        onclick: (e) => {
+            // Explicit redraw will be triggered inside 'chooseNextState'.
+            e.redraw = false;
+            chooseNextState(hash)
+        },
         // onmouseover: () => {
         //     model.nextStatePreview = state;
         // },
@@ -706,20 +800,114 @@ function componentNextStateChoiceElement(stateObj, ind, actionLabel, diffOnly) {
     return nextStateElem;
 }
 
-function errorMsgStr(errorObj) {
+function errorMsgStr(errorInfo) {
     errorPosStr = "";
-    if (errorObj !== null && errorObj.errorPos === null) {
-        errorPosStr = errorObj.errorPos === null ? "" : "(" + errorObj.errorPos + ")";
+    if (errorInfo !== null && errorInfo.errorPos !== null) {
+        errorPosStr = errorInfo.errorPos === null ? "" : "(" + errorInfo.errorPos + ")";
+        if (errorInfo.actionEvalError !== null) {
+            errorPosStr += " (action: " + errorInfo.actionEvalError.name + ")";
+            return m("span", { style: "font-size: 14px;" }, [
+                m("div", { style: "margin-bottom: 10px;font-weight: normal" }, "Error computing next states. "),
+                m("div", {
+                    style: "font-size: 14px;font-weight: normal",
+                    class: "hover-link",
+                    onclick: () => {
+                        model.selectedTab = Tab.SpecEditor;
+                        m.redraw();
+                        highlightError();
+                    }
+                }, [
+                    m("div", "Action: ", m("span", { style: "font-weight: bold" }, errorInfo.actionEvalError.name)),
+                    // m("div", "Expression: ", m("span", { style: "font-weight: bold" }, errorInfo.actionEvalError.node.text)),
+                    m("div", `Line ${errorInfo.errorPos[0] + 1}, Column ${errorInfo.errorPos[1]}`)
+                ])
+            ]);
+        }
     }
-    return errorObj === null ? "" : "ERROR: " + errorObj.message + " " + errorPosStr;
+    return errorInfo === null ? "" : "ERROR: " + errorInfo.message + " " + errorPosStr;
+}
+
+function clearErrorMarks() {
+    const $codeEditor = document.querySelector('.CodeMirror');
+    const editor = $codeEditor.CodeMirror;
+    editor.getAllMarks().forEach(mark => mark.clear());
+}
+
+
+function highlightError(){
+    const $codeEditor = document.querySelector('.CodeMirror');
+    const editor = $codeEditor.CodeMirror;
+    // editor.scrollTo(0,20);
+    // let errLine = model.errorInfo.errorPos[0];
+    // let errCol = model.errorInfo.errorPos[1];
+    // console.log("evalNode:", model.errorInfo.evalNode.text);
+    
+
+    let errLine = model.errorInfo.evalErrNode.startPosition.row ;
+    let errCol = model.errorInfo.evalErrNode.startPosition.column;
+    // let errCol = 0;
+
+    let endLine = model.errorInfo.evalErrNode.endPosition.row;
+    let endCol = model.errorInfo.evalErrNode.endPosition.column;
+    // let endCol = 10;
+
+    // editor.markText(
+    //     {line:errLine, ch:errCol}, 
+    //     {line:endLine, ch:endCol},
+    //     // {className: "error-highlight"}
+    //     {className: "line-error"}
+    // )
+    // Move cursor to error position
+    // editor.setCursor({line: model.errorInfo.errorPos[0], ch: model.errorInfo.errorPos[1]});
+    console.log("errorPos:", model.errorInfo.errorPos);
+    console.log("evalErrNode:", model.errorInfo.evalErrNode);
+
+
+    let startLoc = model.specTreeObjs["rewriter"].getOrigLocation(errLine, errCol);
+    let endLoc = model.specTreeObjs["rewriter"].getOrigLocation(endLine, endCol);
+
+    let start = {
+        line: errLine, 
+        ch: errCol
+    };
+    let end = {
+        line: endLine, 
+        ch: endCol
+    };
+    console.log("start:", start);
+    console.log("end:", end);
+    // editor.setSelection(start, end);
+    editor.markText(start, end, {className: "line-error-highlight"});
+
+    // editor.scrollIntoView(errLine,errCol);
+    // editor.setCursor(errLine,errCol);
+
+    setTimeout(() => {
+        editor.scrollIntoView(errLine,errCol, 100);
+        // editor.setCursor(errLine,errCol);
+        // editor.refresh();
+    }, 50);
+    // m.redraw();
+
 }
 
 function componentErrorInfo() {
     let errorInfo = m("div", {
-        class: "error-info alert alert-danger",
+        class: "alert alert-danger",
         role: "alert",
-        hidden: model.errorObj === null
-    }, errorMsgStr(model.errorObj));
+        hidden: model.errorInfo === null,
+        style: {"margin": "8px"},
+    }, [
+        m("div", {
+            style: "font-size: 12px;",
+            class: "",
+            onclick: () => {
+                model.selectedTab = Tab.SpecEditor;
+                m.redraw();
+                highlightError();
+            }
+        }, errorMsgStr(model.errorInfo)),
+    ]);
     return errorInfo;
 }
 
@@ -778,6 +966,10 @@ function componentNextStateChoices(nextStates) {
     let statesPerRow = 1;
     let currRow = [];
     let count = 0;
+    // If we have encountered an evaluation error, don't present next state choices.
+    if(model.errorInfo !== null){
+        nextStateElems = []
+    }
     for (const elem of nextStateElems) {
         currRow.push(m("th", elem));
         count += 1;
@@ -790,10 +982,10 @@ function componentNextStateChoices(nextStates) {
 }
 
 
-function recomputeInitStates(){
+function recomputeInitStates(initDefName="Init"){
     let interp = new TlaInterpreter();
     let includeFullCtx = true;
-    initStates = interp.computeInitStates(model.specTreeObjs, model.specConstVals, includeFullCtx, model.spec);
+    initStates = interp.computeInitStates(model.specTreeObjs, model.specConstVals, includeFullCtx, model.spec, model.initStatePredName);
     initStates = initStates.map(c => ({"state": c["state"], "quant_bound": c["quant_bound"]}))
     model.allInitStates = _.cloneDeep(initStates);
     console.log("Set initial states: ", model.allInitStates);
@@ -818,7 +1010,20 @@ function recomputeNextStates(fromState) {
             numClones = 0;
 
 
-            let nextStatesForAction = interp.computeNextStates(model.specTreeObjs, model.specConstVals, [fromState], action.node, model.spec)
+            let nextStatesForAction;
+            try {
+                nextStatesForAction = interp.computeNextStates(model.specTreeObjs, model.specConstVals, [fromState], action.node, model.spec, model.nextStatePredName)
+            } catch (e) {
+                model.errorInfo = {
+                    actionEvalError : action,
+                    actionNode: action.node,
+                    // evalNode: currEvalNode,
+                    evalErrNode: evalNodeError[0]
+                }
+                // showEvalError(action.node, e);
+                nextStatesForAction = [];
+                throw e;
+            }
             // console.log("nextStatesForAction", nextStatesForAction); 
             nextStatesForAction = nextStatesForAction.map(c => {
                 let deprimed = c["state"].deprimeVars();
@@ -837,7 +1042,7 @@ function recomputeNextStates(fromState) {
         }
         nextStates = nextStatesByAction;
     } else {
-        nextStates = interp.computeNextStates(model.specTreeObjs, model.specConstVals, [fromState], undefined, model.spec)
+        nextStates = interp.computeNextStates(model.specTreeObjs, model.specConstVals, [fromState], undefined, model.spec, model.nextStatePredName)
             .map(c => {
                 let deprimed = c["state"].deprimeVars();
                 return { "state": deprimed, "quant_bound": c["quant_bound"] };
@@ -864,6 +1069,8 @@ function traceStepBack() {
     model.currTrace = model.currTrace.slice(0, model.currTrace.length - 1);
     model.currTraceActions = model.currTraceActions.slice(0, model.currTraceActions.length - 1);
     updateTraceRouteParams();
+
+    model.errorInfo = null;
 
     // Back to initial states.
     if (model.currTrace.length === 0) {
@@ -954,11 +1161,31 @@ function updateTraceRouteParams() {
         delete newParams.explodedConstantExpr;
     }
 
+    // Update trace expressions.
+    if (model.traceExprs.length > 0) {
+        newParams["traceExprs"] = model.traceExprs;
+    } else {
+        delete newParams.traceExprs;
+    }
+
     // Update CONSTANT params.
     if (Object.keys(model.specConstInputVals).length !== 0) {
         Object.assign(newParams, { constants: model.specConstInputVals });
     } else {
         delete newParams["constants"];
+    }
+
+    // Update init and next predicate names.
+    if (model.initStatePredName !== null) {
+        newParams["initPred"] = model.initStatePredName;
+    } else {
+        delete newParams.initPred;
+    }
+
+    if (model.nextStatePredName !== null) {
+        newParams["nextPred"] = model.nextStatePredName;
+    } else {
+        delete newParams.nextPred;
     }
 
     m.route.set("/home", newParams);
@@ -971,6 +1198,9 @@ function actionIdForNextState(nextStateHash) {
     return actionId;
 }
 
+// Choose next state and re-compute next state choices. Note that 'updateTraceRouteParams'
+// will always trigger an explicit redraw so it's OK to diable an initial redraw on an event that triggers
+// this function.
 function chooseNextState(statehash_short, quantBoundsHash, rethrow = false) {
     // Clear forward history since we're taking a new path
     model.forwardHistory = [];
@@ -1021,6 +1251,8 @@ function chooseNextState(statehash_short, quantBoundsHash, rethrow = false) {
     // Recrod the quant bounds used in the action as well in case we need to tell between two different actions
     // with the same type but different params that lead to the same state.
     model.currTraceActions.push([nextStateActionId, quantBoundsHash]);
+
+    // Update trace route params. Note that setting the route will also explicitly trigger a redraw.
     updateTraceRouteParams();
 
     const start = performance.now();
@@ -1036,9 +1268,11 @@ function chooseNextState(statehash_short, quantBoundsHash, rethrow = false) {
         console.log(`Generating next states took ${duration}ms (cloning took ${duration2}ms )`)
     } catch (e) {
         console.error("Error computing next states.", e);
-        if (currEvalNode !== null) {
+        console.error("currEvalNode:", evalNodeError[0]);
+        if (evalNodeError.length > 0) {
             // Display line where evaluation error occurred.
-            showEvalError(currEvalNode, e);
+            // showEvalError(currEvalNode, e);
+            showEvalError(evalNodeError[0], e);
         }
         if(rethrow){
             throw e;
@@ -1116,10 +1350,14 @@ function showEvalError(currEvalNode, e) {
     let ret = model.specTreeObjs["rewriter"].getOrigLocation(errorLine, errorCol);
     console.log("ERROR pos:", ret);
 
-    model.errorObj = Object.assign(e, { errorPos: [errorLine, errorCol] });
+    if(model.errorInfo === null){
+        model.errorInfo = {}
+    } 
+    model.errorInfo = Object.assign(model.errorInfo, { exception: e, errorPos: [errorLine, errorCol] })
+    // model.errorInfo = Object.assign(e, { errorPos: [errorLine, errorCol] });
 
     // $codeEditor.CodeMirror.addLineClass(errorLine, 'background', 'line-error');
-    $codeEditor.CodeMirror.addLineClass(ret[0], 'background', 'line-error');
+    // $codeEditor.CodeMirror.addLineClass(ret[0], 'background', 'line-error');
     console.log("error evaluating node: ", currEvalNode);
     console.log(e);
 }
@@ -1133,7 +1371,7 @@ function reloadSpec() {
     model.currTraceActions = []
     model.currTraceAliasVals = []
     model.lassoTo = null;
-    model.errorObj = null;
+    model.errorInfo = null;
     model.traceExprs = [];
     model.hiddenStateVars = [];
 
@@ -1143,8 +1381,10 @@ function reloadSpec() {
     //     return;
     // }
 
-    let hasInit = model.spec.hasDefinitionByName("Init");
-    let hasNext = model.spec.hasDefinitionByName("Next");
+
+
+    let hasInit = model.spec.hasDefinitionByName(model.initStatePredName);
+    let hasNext = model.spec.hasDefinitionByName(model.nextStatePredName);
 
     // let hasInit = model.specTreeObjs["op_defs"].hasOwnProperty("Init");
     // let hasNext = model.specTreeObjs["op_defs"].hasOwnProperty("Next");
@@ -1155,10 +1395,11 @@ function reloadSpec() {
         console.log("Warning: 'Init' or 'Next' predicate not found. Still loading spec without generating states.");
 
         // Switch to spec pane and REPL pane.
-        model.selectedTab = Tab.SpecEditor;
+        model.selectedTab = Tab.Config;
         model.selectedTraceTab = TraceTab.REPL;
         return;
     }
+
 
     console.log("Generating initial states.");
     let interp = new TlaInterpreter();
@@ -1173,7 +1414,7 @@ function reloadSpec() {
     // let allInitStates;
     let initStates;
     try {
-        initStates = recomputeInitStates();
+        initStates = recomputeInitStates(model.initStatePredName);
     } catch (e) {
         console.error(e);
         console.error("Error computing initial states.");
@@ -1196,6 +1437,18 @@ function reloadSpec() {
     model.currNextStates = _.cloneDeep(initStates);
 
     // displayEvalGraph();
+
+    // model.selectedTab = Tab.SpecEditor;
+    
+    // Refresh the CodeMirror editor to ensure proper display
+    setTimeout(() => {
+        const $codeEditor = document.querySelector('.CodeMirror');
+        if ($codeEditor && $codeEditor.CodeMirror) {
+            $codeEditor.CodeMirror.refresh();
+        }
+        model.selectedTab = Tab.StateSelection;
+        m.redraw();
+    }, 100);
 
     // Check for trace to load from given link.
     // displayStateGraph();
@@ -1472,13 +1725,14 @@ function getActionLabelText(actionLabel, quantBounds) {
 function animationViewForTraceState(state){
     let viewNode = model.spec.getDefinitionByName(model.animViewDefName).node;
     let initCtx = new Context(null, state, model.specDefs, {}, model.specConstVals);
-    initCtx.setGlobalDefTable(model.spec.globalDefTable);
+    initCtx.setGlobalDefTable(_.cloneDeep(model.spec.globalDefTable));
     initCtx.setSpecObj(model.spec);
     initCtx["defns_curr_context"] = model.spec.getDefinitionByName(model.animViewDefName)["curr_defs_context"];
     let start = performance.now();
     // evalNodeGraph = [];
     try{
         ret = evalExpr(viewNode, initCtx);
+        evalNodeGraphsForAnimation = evalNodeGraph;
     }
     catch(e){
         console.error(e);
@@ -1487,7 +1741,14 @@ function animationViewForTraceState(state){
     }
     // console.log("evalNodeGraph:", evalNodeGraph.length);
     const duration = (performance.now() - start).toFixed(1);
+    model.animRenderTime = duration;
     console.log(`Animation view computed in ${duration}ms.`);
+
+    //
+    // Useful watch expression to determine memory leakage:
+    // Object.keys(model.spec.globalDefTable).length
+    //
+
     // displayEvalGraph(evalNodeGraph);
     viewVal = ret[0]["val"];
     let viewSvgObj = makeSvgAnimObj(viewVal);
@@ -1630,7 +1891,7 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
         let ctx = new Context(null, state, model.specDefs, {}, model.specConstVals);
         // All definitions in the root module should be accessible.
         ctx["defns_curr_context"] = _.keys(model.spec.spec_obj["op_defs"]);
-        ctx.setGlobalDefTable(model.spec.globalDefTable);
+        ctx.setGlobalDefTable(_.cloneDeep(model.spec.globalDefTable));
         ctx.setSpecObj(model.spec);
         let exprVal = evalExprStrInContext(ctx, expr);
         let cols = [
@@ -1666,7 +1927,7 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
 
             // All definitions in the root module should be accessible.
             ctx["defns_curr_context"] = _.keys(model.spec.spec_obj["op_defs"]);
-            ctx.setGlobalDefTable(model.spec.globalDefTable);
+            ctx.setGlobalDefTable(_.cloneDeep(model.spec.globalDefTable));
             ctx.setSpecObj(model.spec);
             exprVal = evalExprStrInContext(ctx, model.traceExprInputText);
             // console.log("exprVal:", exprVal);
@@ -1758,7 +2019,7 @@ function componentTraceViewerState(stateCtx, ind, isLastState, actionId) {
     // let rowElems = m("div", { class: "trace-state-table-div" }, rowElemsTable);
 
     // stateVarElems = m("div", {id:"trace-state-holder"}, [rowElems,vizSvg]);
-    stateVarElems = m("div", { id: "trace-state-holder" }, [rowElemsTable]);
+    stateVarElems = m("div", { id: "trace-state-holder", style: { "background-color": model.errorInfo !== null && isLastState ? "rgba(255, 0, 0, 0.2)" : "transparent" } }, [rowElemsTable]);
 
     let traceStateElemChildren = [stateVarElems];
     if (model.animationExists && model.enableAnimationView) {
@@ -1941,7 +2202,9 @@ function loadTraceWebWorker(stateHashList){
         stateHashList: stateHashList,
         newText: model.specText,
         specPath: model.specPath,
-        constValInputs: model.specConstInputVals
+        constValInputs: model.specConstInputVals,
+        initDefName: model.initStatePredName,
+        nextDefName: model.nextStatePredName
     });
 }
 
@@ -1955,7 +2218,9 @@ function startCheckInvariantWebWorker(invariantExpr){
         newText: model.specText,
         specPath: model.specPath,
         constValInputs: model.specConstInputVals,
-        invariantExpr: invariantExpr
+        invariantExpr: invariantExpr,
+        initDefName: model.initStatePredName,
+        nextDefName: model.nextStatePredName
     });
     console.log("Posted message to invariant checking worker.");
 
@@ -1998,15 +2263,15 @@ function onSpecParse(newText, parsedSpecTree, spec){
     model.spec = spec;
     model.specText = newText;
     model.specTreeObjs = parsedSpecTree;
-    model.errorObj = null;
-    model.actions = parsedSpecTree.actions;
+    model.errorInfo = null;
+    // model.actions = parsedSpecTree.actions;
 
     model.currTrace = [];
     model.currNextStates = [];
     model.replInput = "";
 
-    let hasInit = model.spec.hasDefinitionByName("Init");
-    let hasNext = model.spec.hasDefinitionByName("Next");
+    let hasInit = model.spec.hasDefinitionByName(model.initStatePredName);
+    let hasNext = model.spec.hasDefinitionByName(model.nextStatePredName);
 
     // 
     // Now we allow specs without an Init or Next explicitly defined 
@@ -2032,7 +2297,10 @@ function onSpecParse(newText, parsedSpecTree, spec){
     model.animationExists = model.spec.hasDefinitionByName(model.animViewDefName);
 
     if(hasNext){
-        model.nextStatePred = model.spec.getDefinitionByName("Next")["node"];
+        let nextDef = model.spec.getDefinitionByName(model.nextStatePredName);
+        model.nextStatePred = nextDef["node"];
+        model.actions = spec.parseActionsFromNode(nextDef["node"]);
+
     }
 
      // Load constants if given.
@@ -2045,7 +2313,7 @@ function onSpecParse(newText, parsedSpecTree, spec){
              setConstantValues(reload);
          } catch (e) {
              console.error("Error setting constant values:", e);
-             model.errorObj = {parseError: true, obj: e, message: e};
+             model.errorInfo = {parseError: true, obj: e, message: e};
              return;
          }
      }
@@ -2055,7 +2323,7 @@ function onSpecParse(newText, parsedSpecTree, spec){
         console.log("specConsts:", model.specConsts);
         console.log("Switching to constants pane");
         // model.currPane = Pane.Constants; // TODO: Work out pane UI.
-        model.selectedTab = Tab.Constants
+        model.selectedTab = Tab.Config
         m.redraw();
         return;
     }
@@ -2125,7 +2393,7 @@ async function handleCodeChange(editor, changes) {
         m.redraw(); //explicitly re-draw on promise resolution.
     }).catch(function(e){
         console.log("Error parsing and loading spec.", e);
-        model.errorObj = {parseError: true, obj: e, message: "Error parsing spec."};
+        model.errorInfo = {parseError: true, obj: e, message: "Error parsing spec."};
     });
 }
 
@@ -2141,7 +2409,14 @@ function resetTrace() {
     model.currTraceActions = []
     model.currTraceAliasVals = []
     model.lassoTo = null;
-    model.errorObj = null;
+    model.errorInfo = null;
+    model.selectedTab = Tab.StateSelection;
+
+    const $codeEditor = document.querySelector('.CodeMirror');
+    const editor = $codeEditor.CodeMirror;
+    editor.removeLineClass(0, 'background', 'line-error');
+
+    clearErrorMarks();
 
     let nextStates = recomputeInitStates();
     model.currNextStates = _.cloneDeep(nextStates);
@@ -2359,7 +2634,7 @@ function componentHiddenStateVars(hidden) {
 // }
 
 function specEditorPane(hidden){
-    return m("div", { id: "code-input-pane", hidden:hidden }, [
+    return m("div", { id: "code-input-pane", style: {display: hidden ? "none" : "block"}}, [
         m("div", { id: "code-container" }, [
             m("textarea", { id: "code-input" })
         ])
@@ -2368,12 +2643,16 @@ function specEditorPane(hidden){
 
 function stateSelectionPane(hidden){
 
-    let fullNextStatesSwitch = m("div", { class: "form-check form-switch show-full-next-states-switch", hidden: model.currTrace.length === 0 }, [
+    let fullNextStatesSwitch = m("div", { 
+        class: "form-check form-switch show-full-next-states-switch", 
+        hidden: model.currTrace.length === 0 || model.errorInfo !== null
+    }, [
         m("input", {
             class: "form-check-input",
             type: "checkbox",
             role: "switch",
             id: "fullNextStatesSwitchCheck",
+            hidden: model.errorInfo !== null,
             onclick: function (event) {
                 model.showStateDiffsInSelection = !model.showStateDiffsInSelection;
             }
@@ -2381,7 +2660,8 @@ function stateSelectionPane(hidden){
         m("label", {
             class: "form-check-label",
             for: "fullNextStatesSwitchCheck",
-            role: "switch"
+            role: "switch",
+            hidden: model.errorInfo !== null,
         }, "Show full next states")
     ]);
 
@@ -2420,6 +2700,8 @@ function loadSpecBox(hidden){
                 model.traceExprs = [];
                 model.rootModName = "";
                 model.explodedConstantExpr = null;
+                model.initStatePredName = "Init";
+                model.nextStatePredName = "Next";
                 updateTraceRouteParams();
                 loadSpecFromPath(model.specPath)
                 if(exampleSpecs[k].constant_vals !== undefined){
@@ -2499,14 +2781,24 @@ function headerTabBar() {
         m("li", {
             // id: "state-selection-tab-button",
             class: "nav-item",
-            hidden: _.isEmpty(model.specConsts),
-            onclick: () => model.selectedTab = Tab.Constants,
+            // hidden: _.isEmpty(model.specConsts),
+            onclick: () => model.selectedTab = Tab.Config,
             // style: "background-color:" + ((model.selectedTab === Tab.StateSelection) ? "lightgray" : "none")
-        }, m("a", {class: model.selectedTab === Tab.Constants ? "nav-link active" : "nav-link"}, "Constants")),
+        }, m("a", {class: model.selectedTab === Tab.Config ? "nav-link active" : "nav-link"}, [
+            "Config",
+            (!model.spec || !model.spec.hasDefinitionByName(model.initStatePredName) || !model.spec.hasDefinitionByName(model.nextStatePredName)) ? 
+                m("span", {class: "text-warning ms-1", title: "Missing Init or Next definition"}, "⚠") : ""
+        ])),
         m("li", {
             // id: "spec-editor-tab-button", 
             class: "nav-item",
-            onclick: () => model.selectedTab = Tab.SpecEditor,
+            onclick: () => {
+                model.selectedTab = Tab.SpecEditor;
+                // Refresh the code editor.
+                setTimeout(() => {
+                    getCodeMirrorEditor().refresh();
+                }, 50);
+            },
             // style: "background-color:" + ((model.selectedTab === Tab.SpecEditor) ? "lightgray" : "none")
         }, m("a", {class: model.selectedTab === Tab.SpecEditor ? "nav-link active" : "nav-link"}, "Spec")),
         m("li", {
@@ -2554,7 +2846,7 @@ function midPane() {
     let tabs = [
         headerTabBar(),
         stateSelectionPane(model.selectedTab !== Tab.StateSelection),
-        componentChooseConstants(model.selectedTab !== Tab.Constants),
+        componentChooseConfig(model.selectedTab !== Tab.Config),
         specEditorPane(model.selectedTab !== Tab.SpecEditor),
         loadPane(model.selectedTab !== Tab.Load)
     ];
@@ -2686,13 +2978,19 @@ function replResult(){
     }
 }
 
-function traceStateCounter(){
-    let style = {"font-size": "14px"};
-    if(model.forwardHistory.length > 0){
-        return m("div", {style: style}, `Trace state ${model.currTrace.length} / ${model.currTrace.length + model.forwardHistory.length}`);
-    } else{
-        return m("div", {style: style}, `Trace state ${model.currTrace.length}`);
+function traceStateCounter() {
+    let style = { "font-size": "14px" };
+    let traceStateStr = "";
+    if (model.forwardHistory.length > 0) {
+        traceStateStr = `Trace state ${model.currTrace.length} / ${model.currTrace.length + model.forwardHistory.length}`;
+    } else {
+        traceStateStr = `Trace state ${model.currTrace.length}`;
     }
+
+    return m("div", { style: style }, [
+        m("span", {}, traceStateStr),
+        m("span", { style: { fontSize: "10px", color: "gray", "margin-left": "10px" } }, `  (Animation rendered in ${model.animRenderTime}ms)`)
+    ]);
 }
 
 function animationPane(hidden) {
@@ -2747,7 +3045,7 @@ function replPane(hidden) {
                     try {
                         // All definitions in the root module should be accessible.
                         ctx["defns_curr_context"] = _.keys(model.spec.spec_obj["op_defs"]);
-                        ctx.setGlobalDefTable(model.spec.globalDefTable);
+                        ctx.setGlobalDefTable(_.cloneDeep(model.spec.globalDefTable));
                         ctx.setSpecObj(model.spec);
                         let res = evalExprStrInContext(ctx, model.replInput);
                         model.replResult = res;
@@ -2843,11 +3141,14 @@ function resizeGutter() {
         onmousedown: (e) => {
             // resizer(e)
             e.preventDefault()
+            e.redraw = false;
+
             resize_initial_pos_x = e.x;
             window.addEventListener('mousemove', resize_mousemove);
             window.addEventListener('mouseup', resize_mouseup);
         },
         onmouseup: (e) => {
+            e.redraw = false;
             window.removeEventListener('mousemove', resize_mousemove);
         },
         ondragstart : function() { return false; }
@@ -2908,7 +3209,18 @@ function componentEvalGraphPane(hidden){
         actionSelectButtons = model.actions.map(action => m("button", {class: "btn btn-sm btn-outline-primary", onclick: () => {
             displayEvalGraph(evalNodeGraphsPerAction[action.id]);
         }}, action.name));
+
+
+       
     }
+
+    if(evalNodeGraphsForAnimation !== null){
+        let animGraph = m("button", {class: "btn btn-sm btn-outline-primary", onclick: () => {
+            displayEvalGraph(evalNodeGraphsForAnimation);
+        }}, "Animation")
+        actionSelectButtons.push(animGraph);
+    }
+    
     
     return m("div", {hidden: hidden}, [
         m("div", {class: "btn-group", role: "group", style: {"margin-left": "10px", "margin-bottom": "20px", "margin-top": "8px"}}, actionSelectButtons),
@@ -2971,12 +3283,37 @@ function loadRouteParamsState() {
         model.enableAnimationView = true;
     }
 
+    // Load init and next predicate names if given.
+    let initPredParam = m.route.param("initPred");
+    if (initPredParam) {
+        model.initStatePredName = initPredParam;
+    }
+
+    let nextPredParam = m.route.param("nextPred");
+    if (nextPredParam) {
+        model.nextStatePredName = nextPredParam;
+        // Re-set next state definitions and actions.
+        let nextDef = model.spec.getDefinitionByName(model.nextStatePredName);
+        model.nextStatePred = nextDef["node"];
+        model.actions = model.spec.parseActionsFromNode(nextDef["node"]);
+    }
+
+    if(!initAndNextDefsValid() || !allConstValsSet()){
+        model.selectedTab = Tab.Config;
+    }
+
+    if(initAndNextDefsValid() && allConstValsSet()){
+        setConstantValues();
+        model.selectedTab = Tab.StateSelection;
+    }
+
     // Feature flag to use web worker for trace loading.
     const useWebWorkerLoad = true;
 
     // Load trace if given.
     let traceParamStr = m.route.param("trace")
     if (traceParamStr) {
+        model.selectedTraceTab = TraceTab.Trace;
         let traceParams = traceParamStr.split(",");
 
         if(useWebWorkerLoad){
@@ -3003,6 +3340,12 @@ function loadRouteParamsState() {
             }
         }
     }
+}
+
+function getCodeMirrorEditor() {
+    const $codeEditor = document.querySelector('.CodeMirror');
+    const editor = $codeEditor.CodeMirror;
+    return editor;
 }
 
 //
@@ -3044,6 +3387,9 @@ function loadSpecText(text, specPath) {
             })
         });
         $codeEditor.CodeMirror.setValue(spec);
+        const editor = $codeEditor.CodeMirror;
+        // editor.refresh();
+
 
         // Load changes if given.
         // TODO: Enable once working out concurrency subtleties.
@@ -3063,7 +3409,7 @@ function loadSpecText(text, specPath) {
 
 // Fetch spec from given path (e.g. URL) and reload it in the editor pane and UI.
 function loadSpecFromPath(specPath){
-    model.errorObj = null;
+    model.errorInfo = null;
     // Download the specified spec and load it in the editor pane.
     return m.request(specPath, { responseType: "text" }).then(function (specText) {
         loadSpecText(specText, specPath);
@@ -3132,7 +3478,7 @@ async function loadApp() {
         },
         view: function () {
             let fetchingInProgress = model.rootModName.length === 0 && !model.loadSpecFailed;
-            let isParseErr = model.errorObj != null && model.errorObj.hasOwnProperty("parseError");
+            let isParseErr = model.errorInfo != null && model.errorInfo.hasOwnProperty("parseError");
 
             let spinner = fetchingInProgress ? m("div", {class:"spinner-border spinner-border-sm"}) : m("span");
             let fetchingText = fetchingInProgress ? "Fetching spec... " : "";
