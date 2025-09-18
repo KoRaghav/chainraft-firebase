@@ -355,7 +355,9 @@ UpdatedOrgVars(s, logIdx, newLog) ==
 GetUpdatedOrgVars(s, ldr, term, val, decided, ni, newLog) ==
     LET insts == {i \in DOMAIN newLog : /\ IsRemNode(newLog[i].val) \/ IsAddNode(newLog[i].val)
                                         /\ newLog[i].decided
-                                        /\ i \in DOMAIN log[s] => ~log[s][i].decided}
+                                        /\ i \in DOMAIN log[s] => 
+                                                \/ ~log[s][i].decided
+                                                \/ isNpGreaterThan(term, log[s][i].na)}
 
         newOrgVars == UpdatedOrgVars(s, insts, newLog)
 
@@ -425,10 +427,10 @@ Forward(s, ldr, newNextOk, ni, inst, mAck) ==
     IN IF cnextok[s] = newNextOk \* Nothing happened
        THEN buf' = newBuf
        ELSE IF s = newNextOk THEN buf' = [newBuf EXCEPT ![s]=Append(@, MsgToFwd(s, s, ldr, ni, inst, mAck))]
-       ELSE LET maXAck == MAX({mAck, maxAck[s]})
-                insts == [j \in {i \in DOMAIN log[s] : i > maXAck} |-> 
-                            MsgToFwd(s, newNextOk, ldr, j, log[s][j], maxAck[s])]
-
+       ELSE LET subLog == IF Len(log[s]) = 0 THEN <<>>
+                          ELSE SubSeq(log[s], MAX({1, mAck, maxAck[s]}), Len(log[s]))
+                insts == [j \in DOMAIN subLog |-> 
+                            MsgToFwd(s, newNextOk, ldr, j, subLog[j], maxAck[s])]
             IN buf' = [newBuf EXCEPT ![newNextOk] = @ \o Append(insts, MsgToFwd(s, newNextOk, ldr, ni, inst, mAck))]
 
 -----------------------------------------------------------------------------
@@ -438,73 +440,76 @@ RecvAccept(s) ==
     /\ buf[s] # << >>
     /\ LET m == Head(buf[s])
        IN /\ m.type = "Accept"
-          /\ ~isNpGreaterThan(np[s], m.na) \* Rejecting all the messages of older term
+          /\ IF isNpGreaterThan(np[s], m.na)  \* Ignoring all the Accepts of older term
+             THEN /\ buf' = [buf EXCEPT ![s] = Tail(@)]
+                  /\ UNCHANGED <<clientVars, hisVars, readQueue, orgVars, logVars, leaderVars>>
+             ELSE /\ LET nAcpt == IF m.ni \in DOMAIN log[s] /\ ~isNpGreaterThan(m.na,log[s][m.ni].na)
+                                  THEN MAX({m.nAcpt+1, log[s][m.ni].nAcpt})
+                                  ELSE m.nAcpt+1
 
-          /\ LET nAcpt == IF m.ni \in DOMAIN log[s] /\ ~isNpGreaterThan(m.na,log[s][m.ni].na)
-                          THEN MAX({m.nAcpt+1, log[s][m.ni].nAcpt})
-                          ELSE m.nAcpt+1
+                         mAck == MAX({m.mAck, maxAck[s]})
+                         decided == IF m.ni \in DOMAIN log[s] /\ ~isNpGreaterThan(log[s][m.ni].na,m.na)
+                                    THEN log[s][m.ni].decided \/ IsQuorum(nAcpt, Len(chain[s]))
+                                    ELSE IsQuorum(nAcpt, Len(chain[s]))
 
-                 mAck == MAX({m.mAck, maxAck[s]})
-                 decided == IsQuorum(nAcpt, Len(chain[s]))
+                         instance == [id      |-> m.id,
+                                      val     |-> m.val,
+                                      na      |-> m.na,
+                                      nAcpt   |-> nAcpt,
+                                      decided |-> decided]
+                         newLog == GetUpdatedLog(s, m.ni, instance, mAck)
 
-                 instance == [id      |-> m.id,
-                              val     |-> m.val,
-                              na      |-> m.na,
-                              nAcpt   |-> nAcpt,
-                              decided |-> decided]
-                 newLog == GetUpdatedLog(s, m.ni, instance, mAck)
+                         \* New Org Variables
+                         newOrgVars == GetUpdatedOrgVars(s, m.ldr, m.na, m.val, decided, m.ni, newLog)
+                         newCnextok == newOrgVars[3]
 
-                 \* New Org Variables
-                 newOrgVars == GetUpdatedOrgVars(s, m.ldr, m.na, m.val, decided, m.ni, newLog)
-                 newCnextok == newOrgVars[3]
+                         \*  isMid == /\ IsQuorum(m.nAcpt + 1, Len(newOrgVars[2]))
+                         \*           /\ ~IsQuorum(m.nAcpt, Len(newOrgVars[2]))
+                         isMid == /\ IsQuorum(m.nAcpt + 1, Len(chain[s]))
+                                  /\ ~IsQuorum(m.nAcpt, Len(chain[s]))
 
-                \*  isMid == /\ IsQuorum(m.nAcpt + 1, Len(newOrgVars[2]))
-                \*           /\ ~IsQuorum(m.nAcpt, Len(newOrgVars[2]))
-                 isMid == /\ IsQuorum(m.nAcpt + 1, Len(chain[s]))
-                          /\ ~IsQuorum(m.nAcpt, Len(chain[s]))
+                         stateTransfer == [type   |-> "StateTransfer",
+                                           dest   |-> m.val.srv,
+                                           ldr    |-> m.ldr,
+                                           chain  |-> newOrgVars[2],
+                                           log    |-> newLog,
+                                           term   |-> m.na,
+                                           mAck   |-> mAck]
+                     IN /\ IF IsRemNode(m.val) /\ m.val.srv = s THEN state' = [state EXCEPT ![s] = "FAILED"]
+                           ELSE UNCHANGED state
 
-                 stateTransfer == [type   |-> "StateTransfer",
-                                   dest   |-> m.val.srv,
-                                   ldr    |-> m.ldr,
-                                   chain  |-> newOrgVars[2],
-                                   log    |-> newLog,
-                                   term   |-> m.na,
-                                   mAck   |-> mAck]
-             IN /\ IF IsRemNode(m.val) /\ m.val.srv = s THEN state' = [state EXCEPT ![s] = "FAILED"]
-                   ELSE UNCHANGED state
+                        \* Update Org and leader vars
+                        /\ marked'  = [marked EXCEPT ![s] = newOrgVars[1]]
+                        /\ chain'   = [chain EXCEPT ![s] = newOrgVars[2]]
+                        /\ cnextok' = [cnextok EXCEPT ![s] = newCnextok]
+                        /\ UpdateLeaderInfo(s, m.ldr, m.na)
 
-                \* Update Org and leader vars
-                /\ marked'  = [marked EXCEPT ![s] = newOrgVars[1]]
-                /\ chain'   = [chain EXCEPT ![s] = newOrgVars[2]]
-                /\ cnextok' = [cnextok EXCEPT ![s] = newCnextok]
-                /\ UpdateLeaderInfo(s, m.ldr, m.na)
+                        \* Update Log vars
+                        /\ maxAck' = [maxAck EXCEPT ![s] = mAck]
+                        /\ log' = [log EXCEPT ![s] = newLog]
 
-                \* Update Log vars
-                /\ maxAck' = [maxAck EXCEPT ![s] = mAck]
-                /\ log' = [log EXCEPT ![s] = newLog]
+                        \* Send the write & read resonses to client
+                        /\ IF IsSelfRemv(s, m.val)
+                           THEN UNCHANGED <<readQueue, msgs>>
+                           ELSE /\ readQueue' = [readQueue EXCEPT ![s] = [i \in {j \in DOMAIN @ : j > mAck} |-> @[i]]]
+                                /\ LET newMsg == IF /\ isMid
+                                                    /\ IsAddNode(m.val)
+                                                    /\ m.ni \in DOMAIN log[s] => ~log[s][m.ni].decided
+                                                THEN msgs \union {stateTransfer}
+                                                ELSE msgs
+                                   IN msgs' = newMsg \union Responses(s, m.id, mAck, isMid /\ m.val \in Val, newLog)
 
-                \* Send the write & read resonses to client
-                /\ IF IsSelfRemv(s, m.val)
-                   THEN UNCHANGED <<readQueue, msgs>>
-                   ELSE /\ readQueue' = [readQueue EXCEPT ![s] = [i \in {j \in DOMAIN @ : j > mAck} |-> @[i]]]
-                        /\ LET newMsg == IF /\ isMid
-                                            /\ IsAddNode(m.val)
-                                            /\ m.ni \in DOMAIN log[s] => ~log[s][m.ni].decided
-                                         THEN msgs \union {stateTransfer}
-                                         ELSE msgs
-                           IN msgs' = newMsg \union Responses(s, m.id, mAck, isMid /\ m.val \in Val, newLog)
+                        \* FORWARD(m)
+                        \* What happens when we recieve AddNode(s) of itself??
+                        /\ IF IsSelfRemv(s, m.val) THEN PopMsg(s)
+                           ELSE IF /\ IsAddNode(m.val)
+                                   /\ m.val.srv = newCnextok
+                           THEN buf' = [buf EXCEPT 
+                                           ![s] = Tail(@),
+                                           ![newCnextok] = Append(@, MsgToFwd(s, newCnextok, m.ldr, m.ni, instance, mAck))]
+                           ELSE Forward(s, m.ldr, newCnextok, m.ni, instance, m.mAck)
 
-                \* FORWARD(m)
-                \* What happens when we recieve AddNode(s) of itself??
-                /\ IF IsSelfRemv(s, m.val) THEN PopMsg(s)
-                   ELSE IF /\ IsAddNode(m.val)
-                           /\ m.val.srv = newCnextok
-                   THEN buf' = [buf EXCEPT 
-                                ![s] = Tail(@),
-                                ![newCnextok] = Append(@, MsgToFwd(s, newCnextok, m.ldr, m.ni, instance, mAck))]
-                   ELSE Forward(s, m.ldr, newCnextok, m.ni, instance, m.mAck)
-
-          /\ UNCHANGED <<ops, leaderVars, hisVars>>
+                  /\ UNCHANGED <<ops, leaderVars, hisVars>>
 
 LeaderRecvAcceptAck(s) ==
     /\ state[s] = "ACTIVE"
@@ -551,6 +556,7 @@ RecvRead(s, m) ==
 SuspectNextNode(s) ==
     /\ state[s] = "ACTIVE"
     /\ cnextok[s] # csleader[s] \* Cannot suspect leader
+    /\ state[cnextok[s]] = "FAILED"
 
     /\ SendMsg([type |-> "RemoveNode", srv |-> cnextok[s]])
     /\ removeNodeLog' = Append(removeNodeLog, cnextok[s])
@@ -632,24 +638,22 @@ RecvPrepare(s, m) ==
     /\ msgs' = msgs \union {[type    |-> "PrepareOk",
                              ni      |-> m.ni,
                              np      |-> m.np,
-                             accepts |-> [i \in 1..Len(log[s])-m.ni+1 |-> log[s][m.ni+i-1]],
+                             accepts |-> SubSeq(log[s], m.ni, Len(log[s])),
                              srv     |-> s]}
     /\ UNCHANGED <<ops, cnextok, chain, state, log, maxAck,
                     leaderVars, buf, readQueue, hisVars>>
 
 RECURSIVE ForceUpdateLog(_, _, _, _)
-
 ForceUpdateLog(s, l, entries, i) ==
-    IF entries = << >>
-    THEN l
+    IF entries = << >> THEN l
     ELSE LET entry == Head(entries)
              updatedLog ==
-                IF i \notin DOMAIN log[s] \/ ~isNpGreaterThan(log[s][i].na, entry.na)
-                THEN [j \in DOMAIN l \union {i} |-> IF j # i THEN l[j]
-                            ELSE [entry EXCEPT !.nAcpt = 0, !.decided = FALSE]]
-                ELSE l
+                IF i \in DOMAIN log[s] /\ isNpGreaterThan(log[s][i].na, entry.na)
+                THEN l
+                ELSE [j \in DOMAIN l \union {i} |-> IF j # i THEN l[j]
+                            ELSE [entry EXCEPT !.nAcpt = 0]]
          IN ForceUpdateLog(s, updatedLog, Tail(entries), i+1)
-                             
+                  
 RecvPrepareOk(s, m) ==
     /\ state[s] = "ACTIVE"
     /\ m.type = "PrepareOk"
@@ -710,6 +714,6 @@ CPSpec == CPInit /\ [][CPNext]_CPvars
 
 =============================================================================
 \* Modification History
+\* Last modified Thu Sep 18 22:26:16 IST 2025 by jay
 \* Last modified Thu Sep 18 16:31:03 IST 2025 by Kotikala Raghav
-\* Last modified Wed Sep 17 16:18:46 IST 2025 by jay
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav
