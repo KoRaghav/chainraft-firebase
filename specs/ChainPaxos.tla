@@ -31,7 +31,7 @@ PrepareNum == [seqn : Nat, srv : Server]
 
 LogEntry == [id  : DOMAIN ops \union {Nil},
              val : Val \union RemoveNode \union AddNode \union NoOP,
-             na  : PrepareNum, nAcpt : 0..MaxC, decided : BOOLEAN]
+             na  : PrepareNum, nAcpt : Nat, decided : BOOLEAN]
 StateTransfer == [type   : {"StateTransfer"},
                   dest   : Server,
                   ldr    : Server,
@@ -47,7 +47,7 @@ Message ==
      na   : PrepareNum,
      id   : Nat \union {Nil}, \* Nil for RemoveNode/AddNode/NoOP
      val  : Val \union NoOP \union RemoveNode \union AddNode,
-     nAcpt: 0..MaxC,
+     nAcpt: Nat,
      mAck : Nat] \union
 
     [type : {"AcceptAck"},
@@ -94,14 +94,13 @@ VARIABLE cnextok,
 orgVars == <<cnextok, csleader, marked, chain, state>>
 
 
-TypeOrgVars == /\ cnextok \in [Server -> Server] 
+TypeOrgVars == /\ cnextok \in [Server -> Server \union {Nil}]
                /\ csleader \in [Server -> Server \union {Nil}]
                /\ marked \in [Server -> SUBSET Server]
                /\ chain \in [Server -> Seq(Server)]
                /\ state \in [Server -> {"IDLE", "JOINING", "ACTIVE", "FAILED"}]
 
-                  \*TODO: cnextok is initially Nil for servers after C 
-InitOrgVars == /\ cnextok = [s \in Server |-> IF s >= C THEN 1 ELSE s+1]
+InitOrgVars == /\ cnextok = [s \in Server |-> IF s > C THEN Nil ELSE ((s % C) + 1)]
                /\ csleader = [s \in Server |-> IF s <= C THEN 1 ELSE Nil]
                /\ marked = [s \in Server |-> {}]
                /\ chain = [s \in Server |-> [s_ \in 1..C |-> s_]]
@@ -666,15 +665,16 @@ RecvPrepareOk(s, m) ==
                   /\ maxAcpt' = [maxAcpt EXCEPT ![s] = MAX({@, Len(updatedLog)})]
                   /\ IF Cardinality(prepareResponses[s][m.np] \union {m.srv}) >= MinQuorumSize
                      THEN /\ csleader' = [csleader EXCEPT ![s] = s]
-                          /\ LET insts == [j \in 1..Len(updatedLog)-m.ni+1 |->
-                                [type   |-> "Accept",
-                                 ni     |-> m.ni+j-1,
-                                 ldr    |-> s,
-                                 na     |-> m.np,
-                                 id     |-> updatedLog[m.ni+j-1].id,
-                                 val    |-> updatedLog[m.ni+j-1].val,
-                                 nAcpt  |-> 0,
-                                 mAck   |-> maxAck[s]]]
+                          /\ LET subLog == SubSeq(updatedLog, m.ni, Len(updatedLog))
+                                 insts == [j \in DOMAIN subLog |->
+                                    [type   |-> "Accept",
+                                     ni     |-> m.ni+j-1,
+                                     ldr    |-> s,
+                                     na     |-> m.np,
+                                     id     |-> subLog[j].id,
+                                     val    |-> subLog[j].val,
+                                     nAcpt  |-> 0,
+                                     mAck   |-> maxAck[s]]]
                              IN buf' = [buf EXCEPT ![s] = @ \o insts]
                           /\ prepareResponses' = [prepareResponses EXCEPT ![s] =
                                 [j \in DOMAIN prepareResponses[s] \ {m.np} |-> @[j]]]
@@ -714,6 +714,6 @@ CPSpec == CPInit /\ [][CPNext]_CPvars
 
 =============================================================================
 \* Modification History
-\* Last modified Thu Sep 18 22:26:16 IST 2025 by jay
+\* Last modified Sat Sep 20 11:50:38 IST 2025 by jay
 \* Last modified Thu Sep 18 16:31:03 IST 2025 by Kotikala Raghav
 \* Created Wed Mar 26 18:10:34 IST 2025 by Kotikala Raghav
