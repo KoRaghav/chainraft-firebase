@@ -271,13 +271,13 @@ cs == [i \in Server |->
                 ("fill" :> TextFill(i) @@ "text-anchor" :> "middle" @@ "font-size" :> "9px"))>>,
             [l \in {} |-> {} ])]
 
-line == Rect(XBase -80, YBase-2, 200, 1, ("fill" :> "white" @@ "stroke" :> "black"))
+line == Rect(XBase -85, YBase-2, 200, 1, ("fill" :> "white" @@ "stroke" :> "black"))
 
 extras == <<line>>
 clientAnim == <<client>> \o opsElems \o msgsElems
 serverAnim == cs \o mAcks \o logElems \o bufElems \o readqElems
 
-AnimView == Group(serverAnim \o clientAnim \o extras, [transform |-> "translate(120, 5) scale(1.5)"])
+AnimView == Group(serverAnim \o clientAnim \o extras, [transform |-> "translate(200, 5) scale(1.8)"])
 
 -----------------------------------------------------------------------------
 

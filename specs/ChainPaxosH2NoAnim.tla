@@ -1,4 +1,4 @@
------------------------------ MODULE ChainPaxosNoAnim -----------------------
+----------------------------- MODULE ChainPaxosH2NoAnim -----------------------
 
 EXTENDS ChainPaxosH2
 

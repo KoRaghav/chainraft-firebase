@@ -25,7 +25,8 @@ RecvAcceptH(s) ==
         
        IN /\ IF /\ decided
                 /\ m.val \in Val
-                /\ ops[m.id].status = "Pending"
+                \* /\ ops[m.id].status = "Pending"
+                /\ ~\E i \in DOMAIN w: w[i] = m.id
              THEN w' = Append(w, m.id)
              ELSE UNCHANGED w
     /\ UNCHANGED r
